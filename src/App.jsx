@@ -1,10 +1,41 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { auth, db } from './firebase';
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+} from 'firebase/auth';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
 import './App.css';
 
 // ============================================================
-// PAGE COMPONENTS
+// FIREBASE ERROR MESSAGES (human-readable)
 // ============================================================
+function firebaseErrorMessage(code) {
+  switch (code) {
+    case 'auth/email-already-in-use':
+      return 'An account with this email already exists. Try logging in.';
+    case 'auth/invalid-email':
+      return 'Please enter a valid email address.';
+    case 'auth/weak-password':
+      return 'Password must be at least 6 characters.';
+    case 'auth/user-not-found':
+      return 'No account found with this email. Please create one.';
+    case 'auth/wrong-password':
+      return 'Incorrect password. Please try again.';
+    case 'auth/invalid-credential':
+      return 'Incorrect email or password. Please try again.';
+    case 'auth/too-many-requests':
+      return 'Too many attempts. Please wait a moment and try again.';
+    default:
+      return 'Something went wrong. Please try again.';
+  }
+}
 
+// ============================================================
+// WELCOME PAGE
+// ============================================================
 function WelcomePage({ onNavigate }) {
   return (
     <div className="page welcome-page">
@@ -28,7 +59,10 @@ function WelcomePage({ onNavigate }) {
   );
 }
 
-function SignupPage({ onNavigate, onSignup }) {
+// ============================================================
+// SIGNUP PAGE
+// ============================================================
+function SignupPage({ onNavigate, onSignup, loading }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -44,7 +78,6 @@ function SignupPage({ onNavigate, onSignup }) {
 
   const handleDisabilityChange = (key) => {
     if (key === 'none') {
-      // "None" unchecks everything else
       setDisabilities({
         wheelchair: false,
         visuallyImpaired: false,
@@ -56,12 +89,12 @@ function SignupPage({ onNavigate, onSignup }) {
       setDisabilities(prev => ({
         ...prev,
         [key]: !prev[key],
-        none: false, // uncheck "none" if selecting a disability
+        none: false,
       }));
     }
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     setError('');
 
     if (!name.trim()) {
@@ -81,23 +114,16 @@ function SignupPage({ onNavigate, onSignup }) {
       return;
     }
 
-    // Check at least one disability option selected
     const anySelected = Object.values(disabilities).some(v => v);
     if (!anySelected) {
       setError('Please select at least one accessibility option (or "None")');
       return;
     }
 
-    // Create user object
-    const user = {
-      name: name.trim(),
-      email: email.trim().toLowerCase(),
-      password, // In real app, this gets hashed by Firebase
-      disabilities,
-      createdAt: new Date().toISOString(),
-    };
-
-    onSignup(user);
+    const result = await onSignup(name.trim(), email.trim().toLowerCase(), password, disabilities);
+    if (result?.error) {
+      setError(result.error);
+    }
   };
 
   return (
@@ -158,59 +184,39 @@ function SignupPage({ onNavigate, onSignup }) {
 
           <div className="checkbox-group">
             <label className={`checkbox-item ${disabilities.wheelchair ? 'checked' : ''}`}>
-              <input
-                type="checkbox"
-                checked={disabilities.wheelchair}
-                onChange={() => handleDisabilityChange('wheelchair')}
-              />
+              <input type="checkbox" checked={disabilities.wheelchair} onChange={() => handleDisabilityChange('wheelchair')} />
               <span className="checkbox-icon">♿</span>
               <span>Wheelchair User</span>
             </label>
 
             <label className={`checkbox-item ${disabilities.visuallyImpaired ? 'checked' : ''}`}>
-              <input
-                type="checkbox"
-                checked={disabilities.visuallyImpaired}
-                onChange={() => handleDisabilityChange('visuallyImpaired')}
-              />
+              <input type="checkbox" checked={disabilities.visuallyImpaired} onChange={() => handleDisabilityChange('visuallyImpaired')} />
               <span className="checkbox-icon">👁️</span>
               <span>Visually Impaired</span>
             </label>
 
             <label className={`checkbox-item ${disabilities.hearingImpaired ? 'checked' : ''}`}>
-              <input
-                type="checkbox"
-                checked={disabilities.hearingImpaired}
-                onChange={() => handleDisabilityChange('hearingImpaired')}
-              />
+              <input type="checkbox" checked={disabilities.hearingImpaired} onChange={() => handleDisabilityChange('hearingImpaired')} />
               <span className="checkbox-icon">🦻</span>
               <span>Hearing Impaired</span>
             </label>
 
             <label className={`checkbox-item ${disabilities.anxiety ? 'checked' : ''}`}>
-              <input
-                type="checkbox"
-                checked={disabilities.anxiety}
-                onChange={() => handleDisabilityChange('anxiety')}
-              />
+              <input type="checkbox" checked={disabilities.anxiety} onChange={() => handleDisabilityChange('anxiety')} />
               <span className="checkbox-icon">💙</span>
               <span>Anxiety / Sensory Sensitivity</span>
             </label>
 
             <label className={`checkbox-item ${disabilities.none ? 'checked' : ''}`}>
-              <input
-                type="checkbox"
-                checked={disabilities.none}
-                onChange={() => handleDisabilityChange('none')}
-              />
+              <input type="checkbox" checked={disabilities.none} onChange={() => handleDisabilityChange('none')} />
               <span className="checkbox-icon">✓</span>
               <span>None of the above</span>
             </label>
           </div>
         </div>
 
-        <button className="btn-primary full-width" onClick={handleSubmit}>
-          Create Account
+        <button className="btn-primary full-width" onClick={handleSubmit} disabled={loading}>
+          {loading ? 'Creating Account...' : 'Create Account'}
         </button>
 
         <p className="switch-text">
@@ -222,12 +228,15 @@ function SignupPage({ onNavigate, onSignup }) {
   );
 }
 
-function LoginPage({ onNavigate, onLogin }) {
+// ============================================================
+// LOGIN PAGE
+// ============================================================
+function LoginPage({ onNavigate, onLogin, loading }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     setError('');
 
     if (!email.trim() || !email.includes('@')) {
@@ -239,7 +248,10 @@ function LoginPage({ onNavigate, onLogin }) {
       return;
     }
 
-    onLogin(email.trim().toLowerCase(), password);
+    const result = await onLogin(email.trim().toLowerCase(), password);
+    if (result?.error) {
+      setError(result.error);
+    }
   };
 
   return (
@@ -275,8 +287,8 @@ function LoginPage({ onNavigate, onLogin }) {
           />
         </div>
 
-        <button className="btn-primary full-width" onClick={handleSubmit}>
-          Log In
+        <button className="btn-primary full-width" onClick={handleSubmit} disabled={loading}>
+          {loading ? 'Logging in...' : 'Log In'}
         </button>
 
         <p className="switch-text">
@@ -288,7 +300,25 @@ function LoginPage({ onNavigate, onLogin }) {
   );
 }
 
-function MainScreen({ user, onLogout }) {
+// ============================================================
+// LOADING SCREEN
+// ============================================================
+function LoadingScreen() {
+  return (
+    <div className="page welcome-page">
+      <div className="welcome-content">
+        <div className="logo">🧭</div>
+        <h1>Smart Navigation Filter</h1>
+        <p className="tagline">Loading...</p>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// MAIN SCREEN (after login)
+// ============================================================
+function MainScreen({ user, profile, onLogout }) {
   return (
     <div className="page main-page">
       <div className="main-header">
@@ -297,7 +327,7 @@ function MainScreen({ user, onLogout }) {
           <h2>Smart Navigation Filter</h2>
         </div>
         <div className="main-header-right">
-          <span className="user-name">Hi, {user.name}</span>
+          <span className="user-name">Hi, {profile?.name || 'User'}</span>
           <button className="btn-small" onClick={onLogout}>Log Out</button>
         </div>
       </div>
@@ -307,15 +337,24 @@ function MainScreen({ user, onLogout }) {
           <div className="placeholder-icon">🗺️</div>
           <h3>Map Coming Soon</h3>
           <p>The navigation map will appear here once we build it.</p>
-          <p className="user-info-display">
-            Your profile: <strong>{user.name}</strong> ({user.email})
-          </p>
-          <div className="user-disabilities">
-            {user.disabilities.wheelchair && <span className="tag">♿ Wheelchair</span>}
-            {user.disabilities.visuallyImpaired && <span className="tag">👁️ Visually Impaired</span>}
-            {user.disabilities.hearingImpaired && <span className="tag">🦻 Hearing Impaired</span>}
-            {user.disabilities.anxiety && <span className="tag">💙 Anxiety</span>}
-            {user.disabilities.none && <span className="tag">✓ No accessibility needs</span>}
+
+          <div className="profile-section">
+            <p className="user-info-display">
+              <strong>{profile?.name}</strong>
+            </p>
+            <p className="user-email">{user.email}</p>
+
+            <div className="user-disabilities">
+              {profile?.disabilities?.wheelchair && <span className="tag">♿ Wheelchair</span>}
+              {profile?.disabilities?.visuallyImpaired && <span className="tag">👁️ Visually Impaired</span>}
+              {profile?.disabilities?.hearingImpaired && <span className="tag">🦻 Hearing Impaired</span>}
+              {profile?.disabilities?.anxiety && <span className="tag">💙 Anxiety</span>}
+              {profile?.disabilities?.none && <span className="tag">✓ No accessibility needs</span>}
+            </div>
+          </div>
+
+          <div className="success-badge">
+            ✅ Firebase Connected — Account saved to cloud
           </div>
         </div>
       </div>
@@ -324,55 +363,107 @@ function MainScreen({ user, onLogout }) {
 }
 
 // ============================================================
-// MAIN APP — Page Router
+// MAIN APP — Firebase Auth + Routing
 // ============================================================
 function App() {
-  const [currentPage, setCurrentPage] = useState('welcome');
+  const [currentPage, setCurrentPage] = useState('loading');
   const [currentUser, setCurrentUser] = useState(null);
+  const [userProfile, setUserProfile] = useState(null);
+  const [loading, setLoading] = useState(false);
 
-  // Temporary user storage (will be replaced by Firebase later)
-  const [users, setUsers] = useState([]);
+  // Listen for auth state changes (auto-login on refresh!)
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        setCurrentUser(user);
+        try {
+          const profileDoc = await getDoc(doc(db, 'users', user.uid));
+          if (profileDoc.exists()) {
+            setUserProfile(profileDoc.data());
+          }
+        } catch (err) {
+          console.error('Error loading profile:', err);
+        }
+        setCurrentPage('main');
+      } else {
+        setCurrentUser(null);
+        setUserProfile(null);
+        setCurrentPage('welcome');
+      }
+    });
 
-  const handleSignup = (user) => {
-    // Check if email already exists
-    if (users.find(u => u.email === user.email)) {
-      alert('An account with this email already exists. Please log in.');
-      return;
-    }
+    return () => unsubscribe();
+  }, []);
 
-    setUsers(prev => [...prev, user]);
-    setCurrentUser(user);
-    setCurrentPage('main');
-  };
+  // SIGNUP
+  const handleSignup = async (name, email, password, disabilities) => {
+    setLoading(true);
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
 
-  const handleLogin = (email, password) => {
-    const user = users.find(u => u.email === email && u.password === password);
-    if (user) {
-      setCurrentUser(user);
+      const profile = {
+        name,
+        email,
+        disabilities,
+        createdAt: new Date().toISOString(),
+      };
+      await setDoc(doc(db, 'users', user.uid), profile);
+
+      setUserProfile(profile);
       setCurrentPage('main');
-    } else {
-      alert('Invalid email or password. Please try again.');
+      setLoading(false);
+      return {};
+    } catch (err) {
+      setLoading(false);
+      console.error('Signup error:', err);
+      return { error: firebaseErrorMessage(err.code) };
     }
   };
 
-  const handleLogout = () => {
-    setCurrentUser(null);
-    setCurrentPage('welcome');
+  // LOGIN
+  const handleLogin = async (email, password) => {
+    setLoading(true);
+    try {
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      const profileDoc = await getDoc(doc(db, 'users', user.uid));
+      if (profileDoc.exists()) {
+        setUserProfile(profileDoc.data());
+      }
+
+      setCurrentPage('main');
+      setLoading(false);
+      return {};
+    } catch (err) {
+      setLoading(false);
+      console.error('Login error:', err);
+      return { error: firebaseErrorMessage(err.code) };
+    }
+  };
+
+  // LOGOUT
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (err) {
+      console.error('Logout error:', err);
+    }
   };
 
   return (
     <>
-      {currentPage === 'welcome' && (
-        <WelcomePage onNavigate={setCurrentPage} />
-      )}
+      {currentPage === 'loading' && <LoadingScreen />}
+      {currentPage === 'welcome' && <WelcomePage onNavigate={setCurrentPage} />}
       {currentPage === 'signup' && (
-        <SignupPage onNavigate={setCurrentPage} onSignup={handleSignup} />
+        <SignupPage onNavigate={setCurrentPage} onSignup={handleSignup} loading={loading} />
       )}
       {currentPage === 'login' && (
-        <LoginPage onNavigate={setCurrentPage} onLogin={handleLogin} />
+        <LoginPage onNavigate={setCurrentPage} onLogin={handleLogin} loading={loading} />
       )}
       {currentPage === 'main' && currentUser && (
-        <MainScreen user={currentUser} onLogout={handleLogout} />
+        <MainScreen user={currentUser} profile={userProfile} onLogout={handleLogout} />
       )}
     </>
   );

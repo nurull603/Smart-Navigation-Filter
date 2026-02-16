@@ -86,6 +86,11 @@ body {
   background: #2563eb;
 }
 
+.btn-primary:disabled {
+  background: #555;
+  cursor: not-allowed;
+}
+
 .btn-secondary {
   padding: 14px 28px;
   background: transparent;
@@ -373,9 +378,18 @@ body {
   margin-bottom: 12px;
 }
 
-.user-info-display {
+.profile-section {
   margin-top: 20px;
+}
+
+.user-info-display {
   font-size: 0.85rem;
+}
+
+.user-email {
+  font-size: 0.8rem;
+  color: #6b7280;
+  margin-bottom: 8px;
 }
 
 .user-disabilities {
@@ -393,6 +407,16 @@ body {
   border-radius: 20px;
   font-size: 0.8rem;
   color: #a0c4f0;
+}
+
+.success-badge {
+  margin-top: 24px;
+  padding: 10px 16px;
+  background: #1a2e1a;
+  border: 1px solid #2a4a2a;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: #6ee06e;
 }
 
 /* ============================================================
