@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { BUILDING, NODES, EDGES, ZONES, CORRIDORS, WALLS } from './data/buildingData';
-import { dijkstra, findNearestExit, generateDirections } from './pathfinding';
+import { dijkstra, findNearestExit } from './pathfinding';
 
 // ============================================================
-// NODE COLORS (for 3D spheres)
+// NODE COLORS
 // ============================================================
 const NODE_COLORS_HEX = {
   exit: 0xe02020,
@@ -16,11 +16,132 @@ const NODE_COLORS_HEX = {
   door: 0x606060,
 };
 
-// ============================================================
-// ZONE COLORS → Three.js hex
-// ============================================================
 function cssToHex(css) {
   return parseInt(css.replace('#', ''), 16);
+}
+
+// ============================================================
+// VOICE ENGINE
+// ============================================================
+function speak(text) {
+  if (!('speechSynthesis' in window)) return;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 0.95;
+  utterance.pitch = 1.0;
+  utterance.volume = 1.0;
+  // Try to pick a good English voice
+  const voices = window.speechSynthesis.getVoices();
+  const preferred = voices.find(v => v.lang.startsWith('en') && v.name.includes('Google'));
+  if (preferred) utterance.voice = preferred;
+  else {
+    const english = voices.find(v => v.lang.startsWith('en'));
+    if (english) utterance.voice = english;
+  }
+  window.speechSynthesis.speak(utterance);
+}
+
+// ============================================================
+// GENERATE DIRECTIONS (improved for voice)
+// ============================================================
+function generateVoiceDirections(path, nodes) {
+  if (!path || path.length < 2) return [];
+
+  const nodeMap = {};
+  nodes.forEach(n => { nodeMap[n.id] = n; });
+
+  const directions = [];
+
+  // First instruction
+  const startNode = nodeMap[path[0]];
+  const secondNode = nodeMap[path[1]];
+  const startDx = secondNode.x - startNode.x;
+  const startDy = secondNode.y - startNode.y;
+  let startDir = '';
+  if (Math.abs(startDx) > Math.abs(startDy)) {
+    startDir = startDx > 0 ? 'east' : 'west';
+  } else {
+    startDir = startDy > 0 ? 'north' : 'south';
+  }
+
+  directions.push({
+    text: `Route calculated. Head ${startDir}.`,
+    nodeId: path[0],
+    type: 'start',
+  });
+
+  for (let i = 1; i < path.length; i++) {
+    const prev = nodeMap[path[i - 1]];
+    const curr = nodeMap[path[i]];
+    const next = i < path.length - 1 ? nodeMap[path[i + 1]] : null;
+
+    if (!prev || !curr) continue;
+
+    const dx = curr.x - prev.x;
+    const dy = curr.y - prev.y;
+
+    // Check node type for special instructions
+    const nodeType = curr.type;
+    let specialText = '';
+    if (nodeType === 'elevator') specialText = 'Take the elevator.';
+    else if (nodeType === 'stairs') specialText = 'Use the stairwell.';
+    else if (nodeType === 'ramp') specialText = 'Use the ramp.';
+    else if (nodeType === 'refuge') specialText = 'Proceed to the refuge area. Help is on the way.';
+
+    // Last node = arrival
+    if (i === path.length - 1) {
+      const label = curr.label || curr.type;
+      let arriveText = `You have arrived at ${label}.`;
+      if (nodeType === 'exit') arriveText = `You have reached ${label}. Exit the building now.`;
+      if (nodeType === 'refuge') arriveText = `You have reached the refuge area. Help is on the way.`;
+      directions.push({
+        text: arriveText,
+        nodeId: path[i],
+        type: 'arrive',
+      });
+      continue;
+    }
+
+    // Determine turn
+    if (next) {
+      const dx2 = next.x - curr.x;
+      const dy2 = next.y - curr.y;
+
+      // Cross product for turn direction
+      const cross = dx * dy2 - dy * dx2;
+      // Dot product to check if continuing straight
+      const dot = dx * dx2 + dy * dy2;
+
+      if (Math.abs(cross) < 0.5 && dot > 0) {
+        // Straight
+        if (specialText) {
+          directions.push({ text: specialText, nodeId: path[i], type: 'special' });
+        } else {
+          directions.push({ text: 'Continue straight.', nodeId: path[i], type: 'straight' });
+        }
+      } else if (cross > 0.5) {
+        directions.push({
+          text: specialText || 'Turn left.',
+          nodeId: path[i],
+          type: 'left',
+        });
+      } else if (cross < -0.5) {
+        directions.push({
+          text: specialText || 'Turn right.',
+          nodeId: path[i],
+          type: 'right',
+        });
+      } else {
+        if (specialText) {
+          directions.push({ text: specialText, nodeId: path[i], type: 'special' });
+        } else {
+          directions.push({ text: 'Continue straight.', nodeId: path[i], type: 'straight' });
+        }
+      }
+    }
+  }
+
+  return directions;
 }
 
 // ============================================================
@@ -54,17 +175,22 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
   const [currentPath, setCurrentPath] = useState(null);
   const [pathInfo, setPathInfo] = useState(null);
   const [directions, setDirections] = useState([]);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+
+  // Hazard state
   const [emergencyMode, setEmergencyMode] = useState(false);
   const [blockedEdges, setBlockedEdges] = useState([]);
   const [showNodes, setShowNodes] = useState(true);
 
-  // Refs for dynamic objects
-  const routeMeshRef = useRef(null);
+  // Refs for dynamic 3D objects
+  const routeGroupRef = useRef(null);
   const nodeMeshesRef = useRef([]);
+  const nodeVisualsRef = useRef([]);
   const startMarkerRef = useRef(null);
   const endMarkerRef = useRef(null);
   const blueDotRef = useRef(null);
-  const fireIconsRef = useRef([]);
+  const fireGroupRef = useRef(null);
   const raycasterRef = useRef(new THREE.Raycaster());
   const mouseRef = useRef(new THREE.Vector2());
 
@@ -78,6 +204,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       setCurrentPath(null);
       setPathInfo(null);
       setDirections([]);
+      setCurrentStep(0);
       return;
     }
 
@@ -85,6 +212,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       setCurrentPath(null);
       setPathInfo(null);
       setDirections([]);
+      setCurrentStep(0);
       return;
     }
 
@@ -94,11 +222,20 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
         setCurrentPath(result.path);
         const target = NODES.find(n => n.id === result.targetId);
         setPathInfo({ distance: result.distance.toFixed(1), isRefuge: result.isRefuge, destination: target?.label || result.targetId });
-        setDirections(generateDirections(result.path, NODES));
+        const dirs = generateVoiceDirections(result.path, NODES);
+        setDirections(dirs);
+        setCurrentStep(0);
+        // Announce emergency
+        if (voiceEnabled) {
+          setTimeout(() => speak('Fire detected. Rerouting to nearest exit.'), 300);
+          setTimeout(() => { if (dirs.length > 0) speak(dirs[0].text); }, 2500);
+        }
       } else {
         setCurrentPath(null);
         setPathInfo({ error: 'No safe path available!' });
         setDirections([]);
+        setCurrentStep(0);
+        if (voiceEnabled) speak('No safe path available.');
       }
     } else if (selectedEnd) {
       const result = dijkstra(selectedStart, selectedEnd, NODES, EDGES, wheelchairMode, blockedEdges);
@@ -106,17 +243,63 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
         setCurrentPath(result.path);
         const target = NODES.find(n => n.id === selectedEnd);
         setPathInfo({ distance: result.distance.toFixed(1), destination: target?.label || selectedEnd });
-        setDirections(generateDirections(result.path, NODES));
+        const dirs = generateVoiceDirections(result.path, NODES);
+        setDirections(dirs);
+        setCurrentStep(0);
+        // Announce route
+        if (voiceEnabled && dirs.length > 0) {
+          setTimeout(() => speak(dirs[0].text), 300);
+        }
       } else {
         setCurrentPath(null);
         setPathInfo({ error: wheelchairMode ? 'No accessible path! Route may require stairs.' : 'No path available!' });
         setDirections([]);
+        setCurrentStep(0);
+        if (voiceEnabled) speak('No path available.');
       }
     }
   }, [selectedStart, selectedEnd, wheelchairMode, emergencyMode, blockedEdges, mode]);
 
   // ============================================================
-  // BUILD 3D SCENE
+  // NEXT STEP (simulate walking)
+  // ============================================================
+  const handleNextStep = () => {
+    if (currentStep < directions.length - 1) {
+      const nextStep = currentStep + 1;
+      setCurrentStep(nextStep);
+      if (voiceEnabled) {
+        speak(directions[nextStep].text);
+      }
+      // Move blue dot to the node of this step
+      const nodeId = directions[nextStep].nodeId;
+      if (nodeId && blueDotRef.current) {
+        const node = NODES.find(n => n.id === nodeId);
+        if (node) {
+          blueDotRef.current.position.set(node.x, 0, -node.y);
+        }
+      }
+    }
+  };
+
+  const handlePrevStep = () => {
+    if (currentStep > 0) {
+      const prevStep = currentStep - 1;
+      setCurrentStep(prevStep);
+      if (voiceEnabled) {
+        speak(directions[prevStep].text);
+      }
+      const nodeId = directions[prevStep].nodeId;
+      if (nodeId && blueDotRef.current) {
+        const node = NODES.find(n => n.id === nodeId);
+        if (node) {
+          blueDotRef.current.position.set(node.x, 0, -node.y);
+        }
+      }
+    }
+  };
+
+  // ============================================================
+  // BUILD 3D SCENE (runs once)
   // ============================================================
   useEffect(() => {
     const mount = mountRef.current;
@@ -133,7 +316,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     cameraRef.current = camera;
 
     // --- RENDERER ---
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(mount.clientWidth, mount.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
@@ -162,7 +345,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     fillLight.position.set(-20, 30, -10);
     scene.add(fillLight);
 
-    // --- GROUND PLANE (dark exterior) ---
+    // --- GROUND (dark exterior) ---
     const groundGeo = new THREE.PlaneGeometry(200, 200);
     const groundMat = new THREE.MeshStandardMaterial({ color: 0x0e1018, roughness: 0.9 });
     const ground = new THREE.Mesh(groundGeo, groundMat);
@@ -171,7 +354,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     ground.receiveShadow = true;
     scene.add(ground);
 
-    // --- BUILDING FLOOR (lighter base) ---
+    // --- BUILDING FLOOR ---
     const floorGeo = new THREE.PlaneGeometry(BUILDING.width, BUILDING.height);
     const floorMat = new THREE.MeshStandardMaterial({ color: 0x1e2230, roughness: 0.7 });
     const floor = new THREE.Mesh(floorGeo, floorMat);
@@ -180,7 +363,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     floor.receiveShadow = true;
     scene.add(floor);
 
-    // --- CORRIDOR ZONES ---
+    // --- CORRIDORS ---
     CORRIDORS.forEach(c => {
       const geo = new THREE.PlaneGeometry(c.w, c.h);
       const mat = new THREE.MeshStandardMaterial({ color: 0x252a3a, roughness: 0.6 });
@@ -191,12 +374,11 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       scene.add(mesh);
     });
 
-    // --- ROOM ZONES ---
+    // --- ROOMS ---
     ZONES.forEach(z => {
       const geo = new THREE.PlaneGeometry(z.w, z.h);
-      const color = cssToHex(z.color);
       const mat = new THREE.MeshStandardMaterial({
-        color: color,
+        color: cssToHex(z.color),
         roughness: 0.5,
         transparent: true,
         opacity: 0.5,
@@ -207,7 +389,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       mesh.receiveShadow = true;
       scene.add(mesh);
 
-      // Room label (using sprite)
+      // Room label sprite
       if (z.name) {
         const canvas = document.createElement('canvas');
         canvas.width = 256;
@@ -219,8 +401,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
         ctx.font = 'bold 20px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        const label = z.name.replace('\n', ' ');
-        ctx.fillText(label, 128, 32);
+        ctx.fillText(z.name.replace('\n', ' '), 128, 32);
 
         const texture = new THREE.CanvasTexture(canvas);
         const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true, opacity: 0.8 });
@@ -231,14 +412,10 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       }
     });
 
-    // --- WALLS (extruded) ---
+    // --- WALLS ---
     const wallHeight = 3.0;
     const wallThickness = 0.25;
-    const wallMat = new THREE.MeshStandardMaterial({
-      color: 0xc0c8d4,
-      roughness: 0.4,
-      metalness: 0.1,
-    });
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0xc0c8d4, roughness: 0.4, metalness: 0.1 });
 
     WALLS.forEach(w => {
       const dx = w.x2 - w.x1;
@@ -259,33 +436,27 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       scene.add(mesh);
     });
 
-    // --- WALL TOP EDGE (subtle line on top for definition) ---
+    // Wall top edges
     const edgeMat = new THREE.LineBasicMaterial({ color: 0x8890a0, transparent: true, opacity: 0.5 });
     WALLS.forEach(w => {
-      const points = [
+      const pts = [
         new THREE.Vector3(w.x1, wallHeight + 0.01, -w.y1),
         new THREE.Vector3(w.x2, wallHeight + 0.01, -w.y2),
       ];
-      const geo = new THREE.BufferGeometry().setFromPoints(points);
-      const line = new THREE.Line(geo, edgeMat);
-      scene.add(line);
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      scene.add(new THREE.Line(geo, edgeMat));
     });
 
     // --- EXIT SIGNS ---
     NODES.filter(n => n.type === 'exit').forEach(exit => {
-      // Glowing green sign above exit
       const signGeo = new THREE.BoxGeometry(2.5, 0.8, 0.1);
       const signMat = new THREE.MeshStandardMaterial({
-        color: 0x00cc40,
-        emissive: 0x00aa30,
-        emissiveIntensity: 0.6,
-        roughness: 0.3,
+        color: 0x00cc40, emissive: 0x00aa30, emissiveIntensity: 0.6, roughness: 0.3,
       });
       const sign = new THREE.Mesh(signGeo, signMat);
       sign.position.set(exit.x, wallHeight - 0.5, -exit.y);
       scene.add(sign);
 
-      // Exit light
       const exitLight = new THREE.PointLight(0x00ff40, 0.5, 8);
       exitLight.position.set(exit.x, wallHeight, -exit.y);
       scene.add(exitLight);
@@ -305,14 +476,12 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       frameRef.current = requestAnimationFrame(animate);
       const ctrl = controlsRef.current;
 
-      // Smooth interpolation
       ctrl.rotY += (ctrl.targetRotY - ctrl.rotY) * 0.08;
       ctrl.rotX += (ctrl.targetRotX - ctrl.rotX) * 0.08;
       ctrl.distance += (ctrl.targetDistance - ctrl.distance) * 0.08;
       ctrl.panX += (ctrl.targetPanX - ctrl.panX) * 0.08;
       ctrl.panZ += (ctrl.targetPanZ - ctrl.panZ) * 0.08;
 
-      // Update camera
       const cx = ctrl.panX + ctrl.distance * Math.sin(ctrl.rotY) * Math.cos(ctrl.rotX);
       const cy = ctrl.distance * Math.sin(ctrl.rotX);
       const cz = ctrl.panZ + ctrl.distance * Math.cos(ctrl.rotY) * Math.cos(ctrl.rotX);
@@ -323,6 +492,9 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       renderer.render(scene, camera);
     };
     animate();
+
+    // Preload voices
+    window.speechSynthesis?.getVoices();
 
     // --- CLEANUP ---
     return () => {
@@ -336,48 +508,61 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
   }, []);
 
   // ============================================================
-  // UPDATE NODES (when showNodes changes)
+  // UPDATE NODES
   // ============================================================
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
 
-    // Remove old node meshes
+    // Remove old
     nodeMeshesRef.current.forEach(m => scene.remove(m));
+    nodeVisualsRef.current.forEach(m => scene.remove(m));
     nodeMeshesRef.current = [];
+    nodeVisualsRef.current = [];
 
     if (!showNodes) return;
 
     NODES.forEach(node => {
       const isSmall = node.type === 'intersection' || node.type === 'door';
-      const radius = isSmall ? 0.25 : 0.4;
-      const geo = new THREE.SphereGeometry(radius, 12, 8);
+      const visualRadius = isSmall ? 0.3 : 0.5;
       const color = NODE_COLORS_HEX[node.type] || 0x888888;
+
+      // Visible sphere
+      const geo = new THREE.SphereGeometry(visualRadius, 12, 8);
       const mat = new THREE.MeshStandardMaterial({
-        color,
-        emissive: color,
-        emissiveIntensity: 0.3,
-        roughness: 0.4,
+        color, emissive: color, emissiveIntensity: 0.3, roughness: 0.4,
       });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(node.x, 0.3, -node.y);
-      mesh.userData = { nodeId: node.id };
-      scene.add(mesh);
-      nodeMeshesRef.current.push(mesh);
+      const visual = new THREE.Mesh(geo, mat);
+      visual.position.set(node.x, 0.4, -node.y);
+      scene.add(visual);
+      nodeVisualsRef.current.push(visual);
+
+      // Invisible hit sphere (bigger, easier to click)
+      const hitGeo = new THREE.SphereGeometry(1.2, 8, 6);
+      const hitMat = new THREE.MeshBasicMaterial({ visible: false });
+      const hitMesh = new THREE.Mesh(hitGeo, hitMat);
+      hitMesh.position.set(node.x, 0.4, -node.y);
+      hitMesh.userData = { nodeId: node.id };
+      scene.add(hitMesh);
+      nodeMeshesRef.current.push(hitMesh);
     });
   }, [showNodes]);
 
   // ============================================================
-  // UPDATE ROUTE PATH
+  // UPDATE ROUTE PATH (FIXED)
   // ============================================================
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
 
-    // Remove old route
-    if (routeMeshRef.current) {
-      scene.remove(routeMeshRef.current);
-      routeMeshRef.current = null;
+    // Remove old route group
+    if (routeGroupRef.current) {
+      scene.remove(routeGroupRef.current);
+      routeGroupRef.current.traverse(child => {
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) child.material.dispose();
+      });
+      routeGroupRef.current = null;
     }
 
     if (!currentPath || currentPath.length < 2) return;
@@ -385,45 +570,39 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     const nodeMap = {};
     NODES.forEach(n => { nodeMap[n.id] = n; });
 
-    // Create tube path
     const points = currentPath.map(id => {
       const n = nodeMap[id];
       return new THREE.Vector3(n.x, 0.15, -n.y);
     });
 
+    const routeGroup = new THREE.Group();
+
     const curve = new THREE.CatmullRomCurve3(points, false, 'catmullrom', 0.2);
+
+    // Main tube
     const tubeGeo = new THREE.TubeGeometry(curve, points.length * 8, 0.25, 8, false);
     const tubeMat = new THREE.MeshStandardMaterial({
-      color: 0x3388ff,
-      emissive: 0x2266cc,
-      emissiveIntensity: 0.6,
-      roughness: 0.3,
-      transparent: true,
-      opacity: 0.85,
+      color: 0x3388ff, emissive: 0x2266cc, emissiveIntensity: 0.6,
+      roughness: 0.3, transparent: true, opacity: 0.85,
     });
-    const tube = new THREE.Mesh(tubeGeo, tubeMat);
-    scene.add(tube);
-    routeMeshRef.current = tube;
+    routeGroup.add(new THREE.Mesh(tubeGeo, tubeMat));
 
-    // Glow line
-    const glowMat = new THREE.MeshStandardMaterial({
-      color: 0x3388ff,
-      emissive: 0x3388ff,
-      emissiveIntensity: 1.0,
-      transparent: true,
-      opacity: 0.2,
-    });
+    // Glow tube
     const glowGeo = new THREE.TubeGeometry(curve, points.length * 8, 0.6, 8, false);
-    const glow = new THREE.Mesh(glowGeo, glowMat);
-    scene.add(glow);
+    const glowMat = new THREE.MeshStandardMaterial({
+      color: 0x3388ff, emissive: 0x3388ff, emissiveIntensity: 1.0,
+      transparent: true, opacity: 0.15,
+    });
+    routeGroup.add(new THREE.Mesh(glowGeo, glowMat));
 
-    // Store both for cleanup
-    routeMeshRef.current = new THREE.Group();
-    routeMeshRef.current.add(tube);
-    routeMeshRef.current.add(glow);
-    scene.add(routeMeshRef.current);
-    scene.remove(tube);
-    scene.remove(glow);
+    // Route light
+    const midIdx = Math.floor(points.length / 2);
+    const routeLight = new THREE.PointLight(0x3388ff, 0.5, 15);
+    routeLight.position.copy(points[midIdx]).setY(1);
+    routeGroup.add(routeLight);
+
+    scene.add(routeGroup);
+    routeGroupRef.current = routeGroup;
 
   }, [currentPath]);
 
@@ -434,38 +613,34 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     const scene = sceneRef.current;
     if (!scene) return;
 
-    // Remove old markers
-    if (startMarkerRef.current) { scene.remove(startMarkerRef.current); startMarkerRef.current = null; }
-    if (endMarkerRef.current) { scene.remove(endMarkerRef.current); endMarkerRef.current = null; }
-    if (blueDotRef.current) { scene.remove(blueDotRef.current); blueDotRef.current = null; }
+    // Cleanup old markers
+    [startMarkerRef, endMarkerRef, blueDotRef].forEach(ref => {
+      if (ref.current) {
+        scene.remove(ref.current);
+        ref.current = null;
+      }
+    });
 
-    // Start marker (blue dot with glow)
+    // Blue dot at start
     if (selectedStart) {
       const node = NODES.find(n => n.id === selectedStart);
       if (node) {
         const group = new THREE.Group();
 
-        // Inner dot
+        // Inner sphere
         const dotGeo = new THREE.SphereGeometry(0.5, 16, 12);
         const dotMat = new THREE.MeshStandardMaterial({
-          color: 0x2288ff,
-          emissive: 0x2288ff,
-          emissiveIntensity: 0.8,
-          roughness: 0.2,
+          color: 0x2288ff, emissive: 0x2288ff, emissiveIntensity: 0.8, roughness: 0.2,
         });
         const dot = new THREE.Mesh(dotGeo, dotMat);
         dot.position.y = 0.5;
         group.add(dot);
 
-        // Glow ring
+        // Glow ring on floor
         const ringGeo = new THREE.RingGeometry(0.8, 1.5, 32);
         const ringMat = new THREE.MeshStandardMaterial({
-          color: 0x2288ff,
-          emissive: 0x2288ff,
-          emissiveIntensity: 0.4,
-          transparent: true,
-          opacity: 0.3,
-          side: THREE.DoubleSide,
+          color: 0x2288ff, emissive: 0x2288ff, emissiveIntensity: 0.4,
+          transparent: true, opacity: 0.3, side: THREE.DoubleSide,
         });
         const ring = new THREE.Mesh(ringGeo, ringMat);
         ring.rotation.x = -Math.PI / 2;
@@ -483,7 +658,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       }
     }
 
-    // End marker (red pin)
+    // Red pin at end
     if (selectedEnd && !emergencyMode) {
       const node = NODES.find(n => n.id === selectedEnd);
       if (node) {
@@ -491,19 +666,24 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
 
         const pinGeo = new THREE.ConeGeometry(0.4, 1.5, 8);
         const pinMat = new THREE.MeshStandardMaterial({
-          color: 0xff3344,
-          emissive: 0xff2233,
-          emissiveIntensity: 0.5,
+          color: 0xff3344, emissive: 0xff2233, emissiveIntensity: 0.5,
         });
         const pin = new THREE.Mesh(pinGeo, pinMat);
         pin.position.y = 2;
         group.add(pin);
 
         const baseGeo = new THREE.SphereGeometry(0.3, 8, 6);
-        const baseMat = new THREE.MeshStandardMaterial({ color: 0xff3344, emissive: 0xff2233, emissiveIntensity: 0.5 });
+        const baseMat = new THREE.MeshStandardMaterial({
+          color: 0xff3344, emissive: 0xff2233, emissiveIntensity: 0.5,
+        });
         const base = new THREE.Mesh(baseGeo, baseMat);
         base.position.y = 1.2;
         group.add(base);
+
+        // Red light
+        const light = new THREE.PointLight(0xff3344, 0.5, 5);
+        light.position.y = 2;
+        group.add(light);
 
         group.position.set(node.x, 0, -node.y);
         scene.add(group);
@@ -519,8 +699,14 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     const scene = sceneRef.current;
     if (!scene) return;
 
-    fireIconsRef.current.forEach(m => scene.remove(m));
-    fireIconsRef.current = [];
+    if (fireGroupRef.current) {
+      scene.remove(fireGroupRef.current);
+      fireGroupRef.current = null;
+    }
+
+    if (blockedEdges.length === 0) return;
+
+    const fireGroup = new THREE.Group();
 
     blockedEdges.forEach(b => {
       const n1 = NODES.find(n => n.id === b.from);
@@ -533,24 +719,19 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       // Fire glow
       const fireLight = new THREE.PointLight(0xff4400, 2, 10);
       fireLight.position.set(midX, 2, -midY);
-      scene.add(fireLight);
-      fireIconsRef.current.push(fireLight);
+      fireGroup.add(fireLight);
 
       // Fire sphere
-      const geo = new THREE.SphereGeometry(0.5, 8, 6);
+      const geo = new THREE.SphereGeometry(0.6, 8, 6);
       const mat = new THREE.MeshStandardMaterial({
-        color: 0xff4400,
-        emissive: 0xff2200,
-        emissiveIntensity: 1.5,
-        transparent: true,
-        opacity: 0.8,
+        color: 0xff4400, emissive: 0xff2200, emissiveIntensity: 1.5,
+        transparent: true, opacity: 0.8,
       });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(midX, 1.5, -midY);
-      scene.add(mesh);
-      fireIconsRef.current.push(mesh);
+      fireGroup.add(mesh);
 
-      // Blocked wall (red barrier)
+      // Blocked barrier
       const dx = n2.x - n1.x;
       const dy = n2.y - n1.y;
       const length = Math.sqrt(dx * dx + dy * dy);
@@ -558,22 +739,21 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
 
       const barrierGeo = new THREE.BoxGeometry(length, 0.3, 0.1);
       const barrierMat = new THREE.MeshStandardMaterial({
-        color: 0xff0000,
-        emissive: 0xff0000,
-        emissiveIntensity: 0.5,
-        transparent: true,
-        opacity: 0.6,
+        color: 0xff0000, emissive: 0xff0000, emissiveIntensity: 0.5,
+        transparent: true, opacity: 0.6,
       });
       const barrier = new THREE.Mesh(barrierGeo, barrierMat);
       barrier.position.set(midX, 0.15, -midY);
       barrier.rotation.y = -angle;
-      scene.add(barrier);
-      fireIconsRef.current.push(barrier);
+      fireGroup.add(barrier);
     });
+
+    scene.add(fireGroup);
+    fireGroupRef.current = fireGroup;
   }, [blockedEdges]);
 
   // ============================================================
-  // MOUSE / TOUCH HANDLERS
+  // MOUSE / TOUCH CONTROLS
   // ============================================================
   const handleMouseDown = (e) => {
     controlsRef.current.isDown = true;
@@ -588,7 +768,6 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
 
     const dx = e.clientX - ctrl.startX;
     const dy = e.clientY - ctrl.startY;
-
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) ctrl.moved = true;
 
     ctrl.targetRotY -= dx * 0.005;
@@ -600,7 +779,6 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
   const handleMouseUp = (e) => {
     const ctrl = controlsRef.current;
     ctrl.isDown = false;
-
     if (!ctrl.moved && mode === 'navigate') {
       handleNodeClick(e);
     }
@@ -608,11 +786,11 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
 
   const handleWheel = (e) => {
     e.preventDefault();
-    const ctrl = controlsRef.current;
-    ctrl.targetDistance = Math.max(15, Math.min(120, ctrl.targetDistance + e.deltaY * 0.05));
+    controlsRef.current.targetDistance = Math.max(15, Math.min(120,
+      controlsRef.current.targetDistance + e.deltaY * 0.05
+    ));
   };
 
-  // Click to select node
   const handleNodeClick = (e) => {
     const mount = mountRef.current;
     const camera = cameraRef.current;
@@ -631,6 +809,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
 
       if (!selectedStart) {
         setSelectedStart(nodeId);
+        if (voiceEnabled) speak('Starting point set.');
       } else if (!selectedEnd && !emergencyMode) {
         if (nodeId !== selectedStart) {
           setSelectedEnd(nodeId);
@@ -641,12 +820,14 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
         setCurrentPath(null);
         setPathInfo(null);
         setDirections([]);
+        setCurrentStep(0);
+        if (voiceEnabled) speak('New starting point set.');
       }
     }
   };
 
   // Touch handlers
-  const touchRef = useRef({ startX: 0, startY: 0, time: 0 });
+  const touchRef = useRef({ startX: 0, startY: 0, time: 0, pinchDist: null });
 
   const handleTouchStart = (e) => {
     if (e.touches.length === 1) {
@@ -655,7 +836,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       controlsRef.current.startX = t.clientX;
       controlsRef.current.startY = t.clientY;
       controlsRef.current.moved = false;
-      touchRef.current = { startX: t.clientX, startY: t.clientY, time: Date.now() };
+      touchRef.current = { startX: t.clientX, startY: t.clientY, time: Date.now(), pinchDist: null };
     }
   };
 
@@ -672,7 +853,6 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       ctrl.startX = t.clientX;
       ctrl.startY = t.clientY;
     }
-    // Pinch zoom
     if (e.touches.length === 2) {
       const d = Math.sqrt(
         (e.touches[0].clientX - e.touches[1].clientX) ** 2 +
@@ -680,17 +860,18 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       );
       if (touchRef.current.pinchDist) {
         const delta = touchRef.current.pinchDist - d;
-        controlsRef.current.targetDistance = Math.max(15, Math.min(120, controlsRef.current.targetDistance + delta * 0.1));
+        controlsRef.current.targetDistance = Math.max(15, Math.min(120,
+          controlsRef.current.targetDistance + delta * 0.1
+        ));
       }
       touchRef.current.pinchDist = d;
     }
   };
 
-  const handleTouchEnd = (e) => {
+  const handleTouchEnd = () => {
     const ctrl = controlsRef.current;
     ctrl.isDown = false;
     touchRef.current.pinchDist = null;
-
     if (!ctrl.moved && mode === 'navigate') {
       const t = touchRef.current;
       if (Date.now() - t.time < 300) {
@@ -718,11 +899,21 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     setCurrentPath(null);
     setPathInfo(null);
     setDirections([]);
+    setCurrentStep(0);
+    window.speechSynthesis?.cancel();
   };
 
   // ============================================================
   // RENDER
   // ============================================================
+  const currentDir = directions[currentStep];
+  const dirIcon = currentDir?.type === 'left' ? '⬅️'
+    : currentDir?.type === 'right' ? '➡️'
+    : currentDir?.type === 'arrive' ? '🏁'
+    : currentDir?.type === 'start' ? '📍'
+    : currentDir?.type === 'special' ? '⚡'
+    : '⬆️';
+
   return (
     <div className="map-wrapper">
       {/* TOOLBAR */}
@@ -732,6 +923,12 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
             {wheelchairMode && <span className="mode-badge wheelchair">♿ Wheelchair</span>}
             <button className={`toolbar-btn ${showNodes ? 'active' : ''}`} onClick={() => setShowNodes(!showNodes)}>
               📍 Nodes
+            </button>
+            <button
+              className={`toolbar-btn ${voiceEnabled ? 'active' : ''}`}
+              onClick={() => setVoiceEnabled(!voiceEnabled)}
+            >
+              {voiceEnabled ? '🔊' : '🔇'} Voice
             </button>
           </div>
           <div className="toolbar-right">
@@ -754,13 +951,12 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
         <div className="emergency-banner">🚨 EMERGENCY — FIRE DETECTED — REROUTING 🚨</div>
       )}
 
-      {/* DIRECTION */}
+      {/* DIRECTION BAR */}
       {mode === 'navigate' && directions.length > 0 && (
         <div className="direction-bar">
-          <span className="direction-icon">
-            {directions[0].type === 'left' ? '⬅️' : directions[0].type === 'right' ? '➡️' : '⬆️'}
-          </span>
-          <span className="direction-text">{directions[0].text}</span>
+          <span className="direction-icon">{dirIcon}</span>
+          <span className="direction-text">{currentDir?.text || ''}</span>
+          <span className="direction-step">Step {currentStep + 1}/{directions.length}</span>
         </div>
       )}
 
@@ -799,6 +995,32 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       />
+
+      {/* STEP CONTROLS (simulate walking) */}
+      {mode === 'navigate' && directions.length > 1 && (
+        <div className="step-controls">
+          <button
+            className="step-btn"
+            onClick={handlePrevStep}
+            disabled={currentStep <= 0}
+          >
+            ◀ Prev
+          </button>
+          <button
+            className="step-btn step-btn-primary"
+            onClick={handleNextStep}
+            disabled={currentStep >= directions.length - 1}
+          >
+            Next Step ▶
+          </button>
+          <button
+            className="step-btn"
+            onClick={() => { if (voiceEnabled && currentDir) speak(currentDir.text); }}
+          >
+            🔊 Repeat
+          </button>
+        </div>
+      )}
 
       {/* FLOOR SELECTOR */}
       <div className="floor-selector">

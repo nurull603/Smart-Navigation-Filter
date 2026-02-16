@@ -592,6 +592,56 @@ body {
   z-index: 10;
 }
 
+/* STEP CONTROLS (walk simulator) */
+.step-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #1a1d24;
+  border-top: 1px solid #2a2d36;
+  flex-shrink: 0;
+}
+
+.step-btn {
+  padding: 8px 16px;
+  background: #282c36;
+  border: 1px solid #333a48;
+  border-radius: 8px;
+  color: #a0aec0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.step-btn:hover:not(:disabled) {
+  background: #333a48;
+  color: #fff;
+}
+.step-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.step-btn-primary {
+  background: #2a3a5a;
+  border-color: #3b82f6;
+  color: #7bb8ff;
+}
+
+.step-btn-primary:hover:not(:disabled) {
+  background: #3b82f6;
+  color: #fff;
+}
+
+.direction-step {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+
 .floor-btn {
   width: 36px;
   height: 36px;
