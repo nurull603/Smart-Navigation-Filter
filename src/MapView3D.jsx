@@ -30,7 +30,6 @@ function speak(text) {
   utterance.rate = 0.95;
   utterance.pitch = 1.0;
   utterance.volume = 1.0;
-  // Try to pick a good English voice
   const voices = window.speechSynthesis.getVoices();
   const preferred = voices.find(v => v.lang.startsWith('en') && v.name.includes('Google'));
   if (preferred) utterance.voice = preferred;
@@ -39,6 +38,40 @@ function speak(text) {
     if (english) utterance.voice = english;
   }
   window.speechSynthesis.speak(utterance);
+}
+
+// ============================================================
+// VIBRATION ENGINE (for deaf/hearing impaired users)
+// ============================================================
+// Patterns: different NUMBER of buzzes — 350ms pause between each for easy counting
+const VIBRATION_PATTERNS = {
+  straight:  [200],                                        // 1 buzz
+  left:      [200, 350, 200],                              // 2 buzzes
+  right:     [200, 350, 200, 350, 200],                    // 3 buzzes
+  start:     [200, 350, 200, 350, 200, 350, 200],          // 4 buzzes
+  special:   [200, 350, 200, 350, 200, 350, 200, 350, 200], // 5 buzzes (elevator/ramp/stairs)
+  arrive:    [800],                                        // 1 long buzz
+  emergency: [200, 80, 200, 80, 200, 80, 200, 80, 200, 80, 500], // rapid pulses + long
+};
+
+function vibrate(type) {
+  if (!('vibrate' in navigator)) return;
+  const pattern = VIBRATION_PATTERNS[type] || VIBRATION_PATTERNS.straight;
+  navigator.vibrate(pattern);
+}
+
+function vibrateEmergency() {
+  if (!('vibrate' in navigator)) return;
+  // Strong repeated pattern for emergency — runs 3 times
+  navigator.vibrate([
+    200, 80, 200, 80, 200, 80, 200, 80, 200, 300,
+    200, 80, 200, 80, 200, 80, 200, 80, 200, 300,
+    500, 200, 500,
+  ]);
+}
+
+function stopVibration() {
+  if ('vibrate' in navigator) navigator.vibrate(0);
 }
 
 // ============================================================
@@ -177,6 +210,12 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
   const [directions, setDirections] = useState([]);
   const [currentStep, setCurrentStep] = useState(0);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [vibrationEnabled, setVibrationEnabled] = useState(
+    profile?.disabilities?.hearingImpaired ? true : false
+  );
+  const [showVibGuide, setShowVibGuide] = useState(false);
+
+  const hearingImpaired = profile?.disabilities?.hearingImpaired || false;
 
   // Hazard state
   const [emergencyMode, setEmergencyMode] = useState(false);
@@ -230,12 +269,14 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
           setTimeout(() => speak('Fire detected. Rerouting to nearest exit.'), 300);
           setTimeout(() => { if (dirs.length > 0) speak(dirs[0].text); }, 2500);
         }
+        if (vibrationEnabled) vibrateEmergency();
       } else {
         setCurrentPath(null);
         setPathInfo({ error: 'No safe path available!' });
         setDirections([]);
         setCurrentStep(0);
         if (voiceEnabled) speak('No safe path available.');
+        if (vibrationEnabled) vibrateEmergency();
       }
     } else if (selectedEnd) {
       const result = dijkstra(selectedStart, selectedEnd, NODES, EDGES, wheelchairMode, blockedEdges);
@@ -249,6 +290,9 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
         // Announce route
         if (voiceEnabled && dirs.length > 0) {
           setTimeout(() => speak(dirs[0].text), 300);
+        }
+        if (vibrationEnabled && dirs.length > 0) {
+          setTimeout(() => vibrate(dirs[0].type), 300);
         }
       } else {
         setCurrentPath(null);
@@ -270,6 +314,9 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       if (voiceEnabled) {
         speak(directions[nextStep].text);
       }
+      if (vibrationEnabled) {
+        vibrate(directions[nextStep].type);
+      }
       // Move blue dot to the node of this step
       const nodeId = directions[nextStep].nodeId;
       if (nodeId && blueDotRef.current) {
@@ -287,6 +334,9 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       setCurrentStep(prevStep);
       if (voiceEnabled) {
         speak(directions[prevStep].text);
+      }
+      if (vibrationEnabled) {
+        vibrate(directions[prevStep].type);
       }
       const nodeId = directions[prevStep].nodeId;
       if (nodeId && blueDotRef.current) {
@@ -901,6 +951,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     setDirections([]);
     setCurrentStep(0);
     window.speechSynthesis?.cancel();
+    stopVibration();
   };
 
   // ============================================================
@@ -921,6 +972,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
         <div className="map-toolbar">
           <div className="toolbar-left">
             {wheelchairMode && <span className="mode-badge wheelchair">♿ Wheelchair</span>}
+            {hearingImpaired && <span className="mode-badge hearing">📳 Vibration Mode Active</span>}
             <button className={`toolbar-btn ${showNodes ? 'active' : ''}`} onClick={() => setShowNodes(!showNodes)}>
               📍 Nodes
             </button>
@@ -929,6 +981,19 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
               onClick={() => setVoiceEnabled(!voiceEnabled)}
             >
               {voiceEnabled ? '🔊' : '🔇'} Voice
+            </button>
+            <button
+              className={`toolbar-btn ${vibrationEnabled ? 'active' : ''}`}
+              onClick={() => setVibrationEnabled(!vibrationEnabled)}
+            >
+              {vibrationEnabled ? '📳' : '📴'} Vibration
+            </button>
+            <button
+              className="toolbar-btn guide-btn"
+              onClick={() => setShowVibGuide(true)}
+              title="Vibration Guide"
+            >
+              ❓ Guide
             </button>
           </div>
           <div className="toolbar-right">
@@ -1015,7 +1080,10 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
           </button>
           <button
             className="step-btn"
-            onClick={() => { if (voiceEnabled && currentDir) speak(currentDir.text); }}
+            onClick={() => {
+              if (voiceEnabled && currentDir) speak(currentDir.text);
+              if (vibrationEnabled && currentDir) vibrate(currentDir.type);
+            }}
           >
             🔊 Repeat
           </button>
@@ -1043,6 +1111,104 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
           </>
         )}
       </div>
+
+      {/* VIBRATION GUIDE (compact bar for hearing impaired) */}
+      {hearingImpaired && vibrationEnabled && mode === 'navigate' && (
+        <div className="vibration-guide" onClick={() => setShowVibGuide(true)}>
+          <span className="vib-title">📳 Vibration Active — Tap for Guide</span>
+          <span className="vib-item">⬆️ 1x</span>
+          <span className="vib-item">⬅️ 2x</span>
+          <span className="vib-item">➡️ 3x</span>
+          <span className="vib-item">⚡ 5x</span>
+          <span className="vib-item">🏁 long</span>
+          <span className="vib-item">🔥 rapid</span>
+        </div>
+      )}
+
+      {/* VIBRATION GUIDE MODAL */}
+      {showVibGuide && (
+        <div className="vib-modal-overlay" onClick={() => setShowVibGuide(false)}>
+          <div className="vib-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="vib-modal-header">
+              <h3>📳 Vibration Guide</h3>
+              <button className="vib-modal-close" onClick={() => setShowVibGuide(false)}>✕</button>
+            </div>
+
+            <p className="vib-modal-desc">
+              Each navigation direction has a unique vibration pattern.
+              Press <strong>Test</strong> to feel each pattern.
+            </p>
+
+            <div className="vib-modal-list">
+              {[
+                { icon: '⬆️', label: 'Continue Straight', desc: '1 buzz', type: 'straight', voice: 'Continue straight. 1 buzz.' },
+                { icon: '⬅️', label: 'Turn Left', desc: '2 buzzes', type: 'left', voice: 'Turn left. 2 buzzes.' },
+                { icon: '➡️', label: 'Turn Right', desc: '3 buzzes', type: 'right', voice: 'Turn right. 3 buzzes.' },
+                { icon: '📍', label: 'Route Started', desc: '4 buzzes', type: 'start', voice: 'Route started. 4 buzzes.' },
+                { icon: '⚡', label: 'Elevator / Ramp / Stairs', desc: '5 buzzes', type: 'special', voice: 'Elevator, ramp, or stairs. 5 buzzes.' },
+                { icon: '🏁', label: 'You Have Arrived', desc: '1 long buzz', type: 'arrive', voice: 'You have arrived. 1 long buzz.' },
+                { icon: '🔥', label: 'FIRE EMERGENCY', desc: 'Rapid intense pulses', type: 'emergency', voice: 'Fire emergency. Rapid intense vibration pulses.' },
+              ].map((item, i) => (
+                <div key={i} className={`vib-modal-item ${item.type === 'emergency' ? 'emergency' : ''}`}>
+                  <div className="vib-modal-item-left">
+                    <span className="vib-modal-icon">{item.icon}</span>
+                    <div>
+                      <div className="vib-modal-label">{item.label}</div>
+                      <div className="vib-modal-pattern">{item.desc}</div>
+                    </div>
+                  </div>
+                  <button
+                    className={`vib-test-btn ${item.type === 'emergency' ? 'emergency' : ''}`}
+                    onClick={() => {
+                      if (item.type === 'emergency') {
+                        vibrateEmergency();
+                      } else {
+                        vibrate(item.type);
+                      }
+                      speak(item.voice);
+                    }}
+                  >
+                    ▶ Test
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="vib-modal-footer">
+              <button
+                className="vib-readall-btn"
+                onClick={() => {
+                  const items = [
+                    { type: 'straight', voice: 'Continue straight. 1 buzz.', delay: 0 },
+                    { type: 'left', voice: 'Turn left. 2 buzzes.', delay: 3000 },
+                    { type: 'right', voice: 'Turn right. 3 buzzes.', delay: 6000 },
+                    { type: 'start', voice: 'Route started. 4 buzzes.', delay: 9000 },
+                    { type: 'special', voice: 'Elevator, ramp, or stairs. 5 buzzes.', delay: 12000 },
+                    { type: 'arrive', voice: 'You have arrived. 1 long buzz.', delay: 15000 },
+                    { type: 'emergency', voice: 'Fire emergency. Rapid intense pulses.', delay: 18000 },
+                  ];
+                  speak('Vibration guide.');
+                  items.forEach(item => {
+                    setTimeout(() => {
+                      speak(item.voice);
+                      if (item.type === 'emergency') {
+                        vibrateEmergency();
+                      } else {
+                        vibrate(item.type);
+                      }
+                    }, item.delay);
+                  });
+                }}
+              >
+                🔊 Read All Aloud
+              </button>
+              <button className="vib-close-btn" onClick={() => setShowVibGuide(false)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
