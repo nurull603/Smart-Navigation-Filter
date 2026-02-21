@@ -20,10 +20,28 @@ function cssToHex(css) {
   return parseInt(css.replace('#', ''), 16);
 }
 
+import { TextToSpeech } from '@capacitor-community/text-to-speech';
+
 // ============================================================
-// VOICE ENGINE
+// VOICE ENGINE — uses native TTS on Android, Web Speech in browser
 // ============================================================
 function speak(text) {
+  try {
+    TextToSpeech.speak({
+      text,
+      lang: 'en-US',
+      rate: 0.95,
+      volume: 1.0,
+    }).catch(() => {
+      webSpeak(text);
+    });
+    return;
+  } catch (e) {
+    webSpeak(text);
+  }
+}
+
+function webSpeak(text) {
   if (!('speechSynthesis' in window)) return;
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
@@ -951,6 +969,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     setDirections([]);
     setCurrentStep(0);
     window.speechSynthesis?.cancel();
+    if (nativeTTS) nativeTTS.stop().catch(() => {});
     stopVibration();
   };
 
