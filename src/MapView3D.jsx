@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
-import { BUILDING, NODES, EDGES, ZONES, CORRIDORS, WALLS } from './data/buildingData';
+import { BUILDING, NODES, EDGES, ZONES, CORRIDORS, WALLS, BEACONS } from './data/buildingData';
 import { dijkstra, findNearestExit } from './pathfinding';
 
 // ============================================================
@@ -21,6 +21,12 @@ function cssToHex(css) {
 }
 
 import { TextToSpeech } from '@capacitor-community/text-to-speech';
+
+// BLE Scanning (only in Android app)
+import { BleClient } from '@capacitor-community/bluetooth-le';
+
+const BEACON_UUID = '426c7565-4368-6172-6d42-6561636f6e73';
+const BEACON_MAJOR = 3838;
 
 // ============================================================
 // VOICE ENGINE — uses native TTS on Android, Web Speech in browser
@@ -239,6 +245,10 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
   const [emergencyMode, setEmergencyMode] = useState(false);
   const [blockedEdges, setBlockedEdges] = useState([]);
   const [showNodes, setShowNodes] = useState(true);
+  const [bleScanning, setBleScanning] = useState(false);
+  const [currentBeaconNode, setCurrentBeaconNode] = useState(null);
+  const [followMode, setFollowMode] = useState(false);
+  const beaconRSSI = useRef({});
 
   // Refs for dynamic 3D objects
   const routeGroupRef = useRef(null);
@@ -576,6 +586,166 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
   }, []);
 
   // ============================================================
+  // BLE BEACON SCANNING
+  // ============================================================
+  const startBLEScan = useCallback(async () => {
+    if (!BEACONS || BEACONS.length === 0) {
+      console.log('No beacons configured');
+      return;
+    }
+    try {
+      await BleClient.initialize({ androidNeverForLocation: false });
+      setBleScanning(true);
+      speak('Bluetooth scanning started.');
+
+      await BleClient.requestLEScan(
+        { allowDuplicates: true },
+        (result) => {
+          const rssi = result.rssi;
+          const mfData = result.manufacturerData;
+
+          if (mfData) {
+            console.log('[BLE] Advertisement received. RSSI:', rssi, 'Keys:', Object.keys(mfData));
+
+            // iBeacon always uses Apple company ID = 76 (0x004C) as the manufacturer data key
+            const appleData = mfData[76] || mfData['76'];
+
+            if (appleData && appleData.byteLength >= 23) {
+              // iBeacon format (company ID already stripped by Capacitor plugin):
+              // Byte 0:    0x02 (iBeacon subtype)
+              // Byte 1:    0x15 (21 bytes follow)
+              // Byte 2-17: UUID
+              // Byte 18-19: Major (big-endian)
+              // Byte 20-21: Minor (big-endian)
+              // Byte 22:    TX Power
+              if (appleData.getUint8(0) === 0x02 && appleData.getUint8(1) === 0x15) {
+                const major = (appleData.getUint8(18) << 8) | appleData.getUint8(19);
+                const minor = (appleData.getUint8(20) << 8) | appleData.getUint8(21);
+                console.log('[BLE] iBeacon! Major:', major, 'Minor:', minor, 'RSSI:', rssi);
+                const beacon = BEACONS.find(b => b.minor === minor);
+                if (beacon) {
+                  console.log('[BLE] MATCHED:', beacon.label);
+                  beaconRSSI.current[minor] = { rssi, nodeId: beacon.nodeId, label: beacon.label, timestamp: Date.now() };
+                } else {
+                  console.log('[BLE] No match for minor:', minor, '(expected 4949/4950/4951)');
+                }
+              }
+            } else {
+              // Fallback: search all keys for iBeacon 0x02 0x15 pattern
+              for (const [key, dataView] of Object.entries(mfData)) {
+                if (!dataView || dataView.byteLength < 23) continue;
+                for (let i = 0; i <= Math.min(dataView.byteLength - 22, 4); i++) {
+                  if (dataView.getUint8(i) === 0x02 && dataView.getUint8(i + 1) === 0x15) {
+                    const major = (dataView.getUint8(i + 18) << 8) | dataView.getUint8(i + 19);
+                    const minor = (dataView.getUint8(i + 20) << 8) | dataView.getUint8(i + 21);
+                    console.log('[BLE] iBeacon via fallback key', key, 'Major:', major, 'Minor:', minor);
+                    const beacon = BEACONS.find(b => b.minor === minor);
+                    if (beacon) {
+                      beaconRSSI.current[minor] = { rssi, nodeId: beacon.nodeId, label: beacon.label, timestamp: Date.now() };
+                    }
+                    break;
+                  }
+                }
+              }
+            }
+          }
+
+          // Determine strongest beacon (highest RSSI = closest)
+          const now = Date.now();
+          let strongest = null;
+          let strongestRSSI = -999;
+          Object.entries(beaconRSSI.current).forEach(([minor, data]) => {
+            // Only consider beacons seen in last 5 seconds
+            if (now - data.timestamp < 5000 && data.rssi > strongestRSSI) {
+              strongestRSSI = data.rssi;
+              strongest = data.nodeId;
+            }
+          });
+
+          if (strongest && strongest !== currentBeaconNode) {
+            setCurrentBeaconNode(strongest);
+            // Auto-set as starting position — no manual tap needed
+            setSelectedStart(strongest);
+            // Announce which beacon we're near
+            const b = BEACONS.find(b => b.nodeId === strongest);
+            if (b) speak('Near ' + b.label.split('—')[1]?.trim() || 'beacon');
+          }
+        }
+      );
+    } catch (err) {
+      console.error('BLE scan error:', err);
+      speak('Bluetooth scan failed. Make sure Bluetooth and Location are on.');
+      setBleScanning(false);
+    }
+  }, [currentBeaconNode]);
+
+  const stopBLEScan = useCallback(async () => {
+    try {
+      await BleClient.stopLEScan();
+      setBleScanning(false);
+      speak('Scanning stopped.');
+    } catch (e) {
+      setBleScanning(false);
+    }
+  }, []);
+
+  // ============================================================
+  // MOVE BLUE DOT TO BEACON POSITION
+  // ============================================================
+  useEffect(() => {
+    if (!currentBeaconNode || !blueDotRef.current) return;
+    const node = NODES.find(n => n.id === currentBeaconNode);
+    if (!node) return;
+
+    // Move blue dot
+    blueDotRef.current.position.set(node.x, 0, -node.y);
+    blueDotRef.current.visible = true;
+
+    // Camera follow
+    if (followMode && cameraRef.current) {
+      const cam = cameraRef.current;
+      const targetX = node.x;
+      const targetZ = -node.y;
+      // Smooth camera follow — position camera above and behind
+      cam.position.set(targetX, 35, targetZ + 25);
+      cam.lookAt(targetX, 0, targetZ);
+    }
+  }, [currentBeaconNode, followMode]);
+
+  // Create persistent blue dot — created once when scene is ready, always available
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    if (blueDotRef.current) return; // already created
+
+    const group = new THREE.Group();
+    const dotGeo = new THREE.SphereGeometry(0.6, 16, 16);
+    const dotMat = new THREE.MeshStandardMaterial({
+      color: 0x2288ff, emissive: 0x1166dd, emissiveIntensity: 0.7,
+    });
+    const dot = new THREE.Mesh(dotGeo, dotMat);
+    dot.position.y = 0.6;
+    group.add(dot);
+
+    const ringGeo = new THREE.RingGeometry(0.8, 1.1, 24);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x44aaff, side: THREE.DoubleSide, transparent: true, opacity: 0.4,
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.05;
+    group.add(ring);
+
+    const light = new THREE.PointLight(0x2288ff, 1.0, 6);
+    light.position.y = 1;
+    group.add(light);
+
+    group.visible = false;
+    scene.add(group);
+    blueDotRef.current = group;
+  }, [sceneRef.current]);
+
+  // ============================================================
   // UPDATE NODES
   // ============================================================
   useEffect(() => {
@@ -681,13 +851,18 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     const scene = sceneRef.current;
     if (!scene) return;
 
-    // Cleanup old markers
-    [startMarkerRef, endMarkerRef, blueDotRef].forEach(ref => {
+    // Cleanup old markers — but DON'T wipe blueDot if BLE is controlling it
+    [startMarkerRef, endMarkerRef].forEach(ref => {
       if (ref.current) {
         scene.remove(ref.current);
         ref.current = null;
       }
     });
+    // Only wipe and recreate blueDot if BLE is NOT scanning (manual tap mode)
+    if (!bleScanning && blueDotRef.current) {
+      scene.remove(blueDotRef.current);
+      blueDotRef.current = null;
+    }
 
     // Blue dot at start
     if (selectedStart) {
@@ -1016,6 +1191,18 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
             </button>
           </div>
           <div className="toolbar-right">
+            <button
+              className={`toolbar-btn ${bleScanning ? 'active' : ''}`}
+              onClick={() => bleScanning ? stopBLEScan() : startBLEScan()}
+            >
+              {bleScanning ? '📡' : '📡'} {bleScanning ? 'Scanning' : 'Scan'}
+            </button>
+            <button
+              className={`toolbar-btn ${followMode ? 'active' : ''}`}
+              onClick={() => setFollowMode(!followMode)}
+            >
+              🎯 {followMode ? 'Following' : 'Follow'}
+            </button>
             <button className={`toolbar-btn fire ${emergencyMode ? 'active' : ''}`} onClick={simulateFire}>
               🔥 Fire
             </button>
@@ -1033,6 +1220,15 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       {/* EMERGENCY */}
       {emergencyMode && (
         <div className="emergency-banner">🚨 EMERGENCY — FIRE DETECTED — REROUTING 🚨</div>
+      )}
+
+      {/* BEACON STATUS */}
+      {bleScanning && (
+        <div className="beacon-status">
+          📡 {currentBeaconNode
+            ? `Near: ${BEACONS.find(b => b.nodeId === currentBeaconNode)?.label || currentBeaconNode}`
+            : 'Scanning for beacons...'}
+        </div>
       )}
 
       {/* DIRECTION BAR */}
