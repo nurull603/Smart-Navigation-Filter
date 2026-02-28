@@ -89,9 +89,7 @@ export const ZONES = [
 // CORRIDOR ZONES (lighter highlight for hallways)
 // ============================================================
 export const CORRIDORS = [
-  // Hallway connecting bathroom/bedroom to dining/living
   { x: -5, y: -3, w: 5, h: 6, label: "HALLWAY" },
-  // Entry corridor
   { x: 7,  y: -10, w: 9, h: 4, label: "" },
 ];
 
@@ -100,24 +98,18 @@ export const CORRIDORS = [
 // ============================================================
 export const WALLS = [
   // === OUTER PERIMETER ===
-  // Top wall
   { x1: -16, y1: 13,  x2: 0,   y2: 13 },
   { x1: 0,   y1: 13,  x2: 16,  y2: 13 },
-  // Bottom wall (gap for main entry ~10.5 to 13.5)
   { x1: -16, y1: -13, x2: 10.5,y2: -13 },
   { x1: 13.5,y1: -13, x2: 16,  y2: -13 },
-  // Left wall (gap for kitchen exit ~-11 to -9)
   { x1: -16, y1: -13, x2: -16, y2: -11 },
   { x1: -16, y1: -9,  x2: -16, y2: 13 },
-  // Right wall
   { x1: 16,  y1: -13, x2: 16,  y2: 13 },
 
   // === BEDROOM WALLS ===
-  // Bedroom right wall (with gaps for closets)
   { x1: -3,  y1: 13,  x2: -3,  y2: 10 },
   { x1: -3,  y1: 8.5, x2: -3,  y2: 5.5 },
   { x1: -3,  y1: 4,   x2: -3,  y2: 3 },
-  // Bedroom bottom wall (gap for door at x ≈ -3.5)
   { x1: -16, y1: 3,   x2: -4.5,y2: 3 },
   { x1: -1.5,y1: 3,   x2: 0,   y2: 3 },
 
@@ -126,13 +118,10 @@ export const WALLS = [
   { x1: -3,  y1: 8.5, x2: 0,   y2: 8.5 },
   { x1: -3,  y1: 5.5, x2: 0,   y2: 5.5 },
   { x1: -3,  y1: 4,   x2: 0,   y2: 4 },
-  // Closet right wall
   { x1: 0,   y1: 4,   x2: 0,   y2: 13 },
 
   // === BATHROOM WALLS ===
-  // Bathroom right wall
   { x1: -7,  y1: 3,   x2: -7,  y2: 0 },
-  // Bathroom bottom wall (gap for door)
   { x1: -16, y1: -3,  x2: -7.5,y2: -3 },
 
   // Linen closet walls
@@ -140,21 +129,17 @@ export const WALLS = [
   { x1: -5,  y1: 3,   x2: -5,  y2: 0 },
 
   // === KITCHEN WALLS ===
-  // Kitchen right wall (gap for door at y ≈ -3.5 to -4.5)
   { x1: -5,  y1: -3,  x2: -5,  y2: -3.5 },
   { x1: -5,  y1: -5,  x2: -5,  y2: -13 },
 
   // === DINING / LIVING DIVIDER ===
-  // Partial wall between living room and hallway/dining
   { x1: 0,   y1: 0,   x2: 0,   y2: -3 },
 
   // === DINING BOTTOM WALL ===
   { x1: -5,  y1: -10, x2: 7,   y2: -10 },
 
   // === ENTRY AREA ===
-  // Entry top wall
   { x1: 7,   y1: -9,  x2: 16,  y2: -9 },
-  // Entry left wall (gap connects to dining)
   { x1: 7,   y1: -10, x2: 7,   y2: -13 },
 
   // === BOTTOM CLOSET ===
@@ -196,7 +181,9 @@ export const FIRE_ZONES = {
 };
 
 // ============================================================
-// BEACON CONFIGURATION (update with real values from BeaconSET+)
+// BEACON CONFIGURATION — 2 Blue Charm BC011 beacons
+// UUID: 426C7565-4368-6172-6D42-6561636F6E73
+// Major: 3838 (both)
 // ============================================================
 export const BEACONS = [
   {
@@ -211,7 +198,7 @@ export const BEACONS = [
     id: "BEACON_2",
     uuid: "426C7565-4368-6172-6D42-6561636F6E73",
     major: 3838,
-    minor: 4050,
+    minor: 4950,
     nodeId: "BEDROOM_C",
     label: "Bedroom Beacon",
   },
