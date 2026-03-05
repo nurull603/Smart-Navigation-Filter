@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">smart-navigation-filter</string>
+    <string name="title_activity_main">smart-navigation-filter</string>
+    <string name="package_name">com.smartnav.filter</string>
+    <string name="custom_url_scheme">com.smartnav.filter</string>
+</resources>
