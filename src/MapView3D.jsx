@@ -1,7 +1,20 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
-import { BUILDING, NODES, EDGES, ZONES, CORRIDORS, WALLS, BEACONS } from './data/buildingData';
+import { BUILDING, NODES, EDGES, ZONES, CORRIDORS, WALLS, BEACONS, FIRE_ZONES } from './data/buildingData';
 import { dijkstra, findNearestExit } from './pathfinding';
+
+// Native BLE (Capacitor) — lazy loaded, falls back to Web Bluetooth
+let NativeBle = null;
+let nativeBleChecked = false;
+async function getNativeBle() {
+  if (nativeBleChecked) return NativeBle;
+  nativeBleChecked = true;
+  try {
+    const mod = await import('@capacitor-community/bluetooth-le');
+    NativeBle = mod.BleClient;
+  } catch (e) {}
+  return NativeBle;
+}
 
 // ============================================================
 // NODE COLORS
@@ -20,31 +33,11 @@ function cssToHex(css) {
   return parseInt(css.replace('#', ''), 16);
 }
 
-import { TextToSpeech } from '@capacitor-community/text-to-speech';
-
-// BLE Scanning (only in Android app)
-import { BleClient } from '@capacitor-community/bluetooth-le';
-
-const BEACON_UUID = '426c7565-4368-6172-6d42-6561636f6e73';
-const BEACON_MAJOR = 3838;
-
 // ============================================================
-// VOICE ENGINE — uses native TTS on Android, Web Speech in browser
+// VOICE ENGINE — uses Web Speech API
 // ============================================================
 function speak(text) {
-  try {
-    TextToSpeech.speak({
-      text,
-      lang: 'en-US',
-      rate: 0.95,
-      volume: 1.0,
-    }).catch(() => {
-      webSpeak(text);
-    });
-    return;
-  } catch (e) {
-    webSpeak(text);
-  }
+  webSpeak(text);
 }
 
 function webSpeak(text) {
@@ -248,7 +241,15 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
   const [bleScanning, setBleScanning] = useState(false);
   const [currentBeaconNode, setCurrentBeaconNode] = useState(null);
   const [followMode, setFollowMode] = useState(false);
-  const beaconRSSI = useRef({});
+  const [bleDebug, setBleDebug] = useState('');
+  const [bleDeviceCount, setBleDeviceCount] = useState(0);
+  const [showBleDebug, setShowBleDebug] = useState(true);
+  const [bleLog, setBleLog] = useState([]);
+  const beaconRSSI = useRef({});        // raw latest readings
+  const beaconSmoothed = useRef({});    // smoothed RSSI (rolling average)
+  const currentBeaconRef = useRef(null);
+  const adCountRef = useRef(0);
+  const interpolatedPos = useRef({ x: 0, y: 0 });
 
   // Refs for dynamic 3D objects
   const routeGroupRef = useRef(null);
@@ -375,6 +376,39 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       }
     }
   };
+
+  // ============================================================
+  // AUTO-ADVANCE: beacon moves → step advances automatically
+  // ============================================================
+  useEffect(() => {
+    if (!currentBeaconNode || directions.length === 0) return;
+
+    // Check if current beacon matches any direction step AHEAD of current step
+    for (let i = currentStep + 1; i < directions.length; i++) {
+      if (directions[i].nodeId === currentBeaconNode) {
+        setCurrentStep(i);
+        if (voiceEnabled) speak(directions[i].text);
+        if (vibrationEnabled) vibrate(directions[i].type);
+        break;
+      }
+    }
+
+    // Also check nodes near the beacon on the path
+    if (currentPath) {
+      const beaconIdx = currentPath.indexOf(currentBeaconNode);
+      if (beaconIdx >= 0) {
+        for (let i = currentStep + 1; i < directions.length; i++) {
+          const dirNodeIdx = currentPath.indexOf(directions[i].nodeId);
+          if (dirNodeIdx >= 0 && dirNodeIdx <= beaconIdx) {
+            setCurrentStep(i);
+            if (voiceEnabled) speak(directions[i].text);
+            if (vibrationEnabled) vibrate(directions[i].type);
+            break;
+          }
+        }
+      }
+    }
+  }, [currentBeaconNode]);
 
   // ============================================================
   // BUILD 3D SCENE (runs once)
@@ -586,62 +620,371 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
   }, []);
 
   // ============================================================
-  // BLE BEACON SCANNING
+  // BLE BEACON SCANNING — ROBUST VERSION WITH DEBUG
   // ============================================================
-  const startBLEScan = useCallback(async () => {
-    if (!BEACONS || BEACONS.length === 0) {
-      console.log('No beacons configured');
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    currentBeaconRef.current = currentBeaconNode;
+  }, [currentBeaconNode]);
+
+  // Helper: add to debug log (keeps last 30 entries)
+  const addLog = useCallback((msg) => {
+    setBleLog(prev => [...prev.slice(-29), { t: Date.now(), msg }]);
+  }, []);
+
+  // Helper: DataView to hex string for debugging
+  const dvToHex = (dv) => {
+    const bytes = [];
+    for (let i = 0; i < Math.min(dv.byteLength, 30); i++) {
+      bytes.push(dv.getUint8(i).toString(16).padStart(2, '0'));
+    }
+    return bytes.join(' ');
+  };
+
+  // Parse iBeacon data from manufacturer data — tries multiple strategies
+  const parseBeaconFromAd = useCallback((event) => {
+    const mfData = event.manufacturerData;
+    if (!mfData || mfData.size === 0) return null;
+
+    for (const [companyId, dataView] of mfData) {
+      if (!dataView || dataView.byteLength < 4) continue;
+
+      // Strategy 1: Standard iBeacon — look for 0x02 0x15 in first 10 bytes
+      for (let i = 0; i <= Math.min(dataView.byteLength - 22, 10); i++) {
+        try {
+          if (dataView.getUint8(i) === 0x02 && dataView.getUint8(i + 1) === 0x15) {
+            if (i + 22 <= dataView.byteLength) {
+              const major = (dataView.getUint8(i + 18) << 8) | dataView.getUint8(i + 19);
+              const minor = (dataView.getUint8(i + 20) << 8) | dataView.getUint8(i + 21);
+              return { major, minor, rssi: event.rssi, method: 'iBeacon', companyId };
+            }
+          }
+        } catch (e) {}
+      }
+
+      // Strategy 2: Some beacons put major/minor at fixed offsets without 0x02 0x15 prefix
+      if (dataView.byteLength >= 20) {
+        try {
+          // Try reading major at byte 18, minor at byte 20 (raw offset)
+          const major = (dataView.getUint8(18) << 8) | dataView.getUint8(19);
+          const minor = (dataView.getUint8(20) << 8) | dataView.getUint8(21);
+          // Check if this matches any known beacon
+          const match = BEACONS.find(b => b.minor === minor && b.major === major);
+          if (match) {
+            return { major, minor, rssi: event.rssi, method: 'rawOffset', companyId };
+          }
+        } catch (e) {}
+      }
+    }
+    return null;
+  }, []);
+
+  // Smooth RSSI using exponential moving average
+  const smoothRSSI = (beaconId, rawRSSI) => {
+    const alpha = 0.3; // smoothing factor (0-1, lower = smoother)
+    const prev = beaconSmoothed.current[beaconId];
+    if (prev === undefined) {
+      beaconSmoothed.current[beaconId] = rawRSSI;
+    } else {
+      beaconSmoothed.current[beaconId] = alpha * rawRSSI + (1 - alpha) * prev;
+    }
+    return beaconSmoothed.current[beaconId];
+  };
+
+  // Path waypoints between Beacon 1 (Living Room) and Beacon 2 (Bedroom)
+  const BEACON_PATH = [
+    { id: 'LIVING_C',     x: 9,  y: 7 },   // ratio 0.0
+    { id: 'LIVING_S',     x: 9,  y: 0 },   // ratio 0.25
+    { id: 'HALL',          x: -2, y: 0 },   // ratio 0.50
+    { id: 'BEDROOM_DOOR', x: -3, y: 3 },   // ratio 0.75
+    { id: 'BEDROOM_C',    x: -9, y: 8 },   // ratio 1.0
+  ];
+
+  const getInterpolatedPosition = (ratio) => {
+    const clamped = Math.max(0, Math.min(1, ratio));
+    const totalSegments = BEACON_PATH.length - 1;
+    const segment = clamped * totalSegments;
+    const idx = Math.floor(segment);
+    const frac = segment - idx;
+    const from = BEACON_PATH[Math.min(idx, totalSegments)];
+    const to = BEACON_PATH[Math.min(idx + 1, totalSegments)];
+    return {
+      x: from.x + (to.x - from.x) * frac,
+      y: from.y + (to.y - from.y) * frac,
+    };
+  };
+
+  // Move blue dot directly to x,y position
+  const moveBlueDot = (x, y) => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    if (blueDotRef.current) {
+      blueDotRef.current.position.set(x, 0, -y);
+      blueDotRef.current.visible = true;
       return;
     }
+    const group = new THREE.Group();
+    const dotGeo = new THREE.SphereGeometry(0.5, 16, 12);
+    const dotMat = new THREE.MeshStandardMaterial({
+      color: 0x2288ff, emissive: 0x2288ff, emissiveIntensity: 0.8, roughness: 0.2,
+    });
+    const dot = new THREE.Mesh(dotGeo, dotMat);
+    dot.position.y = 0.5;
+    group.add(dot);
+    const ringGeo = new THREE.RingGeometry(0.8, 1.5, 32);
+    const ringMat = new THREE.MeshStandardMaterial({
+      color: 0x2288ff, emissive: 0x2288ff, emissiveIntensity: 0.4,
+      transparent: true, opacity: 0.3, side: THREE.DoubleSide,
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.05;
+    group.add(ring);
+    const light = new THREE.PointLight(0x2288ff, 1.0, 6);
+    light.position.y = 1;
+    group.add(light);
+    group.position.set(x, 0, -y);
+    scene.add(group);
+    blueDotRef.current = group;
+  };
+
+  // Determine position from RSSI ratio and slide dot along path
+  const updateBeaconPosition = useCallback(() => {
+    const now = Date.now();
+    const b1 = beaconRSSI.current['BEACON_1']; // Living room
+    const b2 = beaconRSSI.current['BEACON_2']; // Bedroom
+
+    if (!b1 && !b2) return;
+
+    // Only one beacon heard — place at that beacon
+    if (!b1 || now - b1.timestamp > 12000) {
+      const pos = getInterpolatedPosition(1.0);
+      interpolatedPos.current = pos;
+      moveBlueDot(pos.x, pos.y);
+      if (currentBeaconRef.current !== 'BEDROOM_C') {
+        currentBeaconRef.current = 'BEDROOM_C';
+        setCurrentBeaconNode('BEDROOM_C');
+        setSelectedStart('BEDROOM_C');
+        speak('You are near Bedroom');
+        addLog('At Bedroom (only beacon heard)');
+      }
+      return;
+    }
+    if (!b2 || now - b2.timestamp > 12000) {
+      const pos = getInterpolatedPosition(0.0);
+      interpolatedPos.current = pos;
+      moveBlueDot(pos.x, pos.y);
+      if (currentBeaconRef.current !== 'LIVING_C') {
+        currentBeaconRef.current = 'LIVING_C';
+        setCurrentBeaconNode('LIVING_C');
+        setSelectedStart('LIVING_C');
+        speak('You are near Living Room');
+        addLog('At Living Room (only beacon heard)');
+      }
+      return;
+    }
+
+    // Both beacons heard — slide dot based on signal ratio
+    const rssi1 = beaconSmoothed.current['BEACON_1'] || b1.rssi;
+    const rssi2 = beaconSmoothed.current['BEACON_2'] || b2.rssi;
+    const diff = rssi2 - rssi1;
+    const ratio = Math.max(0, Math.min(1, 0.5 + (diff / 60)));
+
+    const pos = getInterpolatedPosition(ratio);
+    interpolatedPos.current = pos;
+    moveBlueDot(pos.x, pos.y);
+
+    // Only announce room when clearly in one (not in hallway)
+    const nearestNode = ratio < 0.35 ? 'LIVING_C' : ratio > 0.65 ? 'BEDROOM_C' : null;
+    if (nearestNode && nearestNode !== currentBeaconRef.current) {
+      currentBeaconRef.current = nearestNode;
+      setCurrentBeaconNode(nearestNode);
+      setSelectedStart(nearestNode);
+      const label = nearestNode === 'LIVING_C' ? 'Living Room' : 'Bedroom';
+      speak('You are near ' + label);
+      addLog('MOVED to ' + label + ' (ratio: ' + ratio.toFixed(2) + ')');
+    }
+
+    setBleDebug('LR: ' + rssi1.toFixed(0) + ' | BR: ' + rssi2.toFixed(0) + ' | pos: ' + (ratio * 100).toFixed(0) + '%');
+  }, [addLog]);
+
+  const bleScanAbortRef = useRef(null);
+  const bleListenerRef = useRef(null);
+
+  const startBLEScan = useCallback(async () => {
+    if (!BEACONS || BEACONS.length === 0) {
+      setBleDebug('No beacons configured.');
+      return;
+    }
+
+    // If already scanning, stop
+    if (bleScanning) {
+      stopBLEScan();
+      return;
+    }
+
     try {
-      await BleClient.initialize({ androidNeverForLocation: false });
-      setBleScanning(true);
-      speak('Bluetooth scanning started.');
+      setBleDebug('Starting scan...');
+      addLog('Scan starting...');
+      addLog('Beacons configured: ' + BEACONS.map(b => b.label + ' minor=' + b.minor).join(', '));
 
-      await BleClient.requestLEScan(
-        { allowDuplicates: true },
-        (result) => {
-          const rssi = result.rssi;
-          const mfData = result.manufacturerData;
+      // Try to load Capacitor native BLE
+      const nativeBle = await getNativeBle();
 
-          if (mfData) {
-            console.log('[BLE] Advertisement received. RSSI:', rssi, 'Keys:', Object.keys(mfData));
+      // =============================================
+      // METHOD 1: Capacitor Native BLE (Android app)
+      // =============================================
+      if (nativeBle) {
+        addLog('Using NATIVE Capacitor BLE ✓');
+        await nativeBle.initialize({ androidNeverForLocation: false });
 
-            // iBeacon always uses Apple company ID = 76 (0x004C) as the manufacturer data key
-            const appleData = mfData[76] || mfData['76'];
+        // Request permissions explicitly
+        try {
+          await nativeBle.requestPermissions();
+          addLog('Permissions granted ✓');
+        } catch (e) {
+          addLog('Permission request: ' + (e?.message || 'ok'));
+        }
 
-            if (appleData && appleData.byteLength >= 23) {
-              // iBeacon format (company ID already stripped by Capacitor plugin):
-              // Byte 0:    0x02 (iBeacon subtype)
-              // Byte 1:    0x15 (21 bytes follow)
-              // Byte 2-17: UUID
-              // Byte 18-19: Major (big-endian)
-              // Byte 20-21: Minor (big-endian)
-              // Byte 22:    TX Power
-              if (appleData.getUint8(0) === 0x02 && appleData.getUint8(1) === 0x15) {
-                const major = (appleData.getUint8(18) << 8) | appleData.getUint8(19);
-                const minor = (appleData.getUint8(20) << 8) | appleData.getUint8(21);
-                console.log('[BLE] iBeacon! Major:', major, 'Minor:', minor, 'RSSI:', rssi);
-                const beacon = BEACONS.find(b => b.minor === minor);
-                if (beacon) {
-                  console.log('[BLE] MATCHED:', beacon.label);
-                  beaconRSSI.current[minor] = { rssi, nodeId: beacon.nodeId, label: beacon.label, timestamp: Date.now() };
-                } else {
-                  console.log('[BLE] No match for minor:', minor, '(expected 4949/4950/4951)');
+        // Check BT enabled
+        const enabled = await nativeBle.isEnabled();
+        addLog('Bluetooth enabled: ' + enabled);
+
+        await nativeBle.requestLEScan(
+          { allowDuplicates: true, scanMode: 2 },
+          (result) => {
+            adCountRef.current += 1;
+            const count = adCountRef.current;
+            const rssi = result.rssi;
+            const name = result.localName || result.device?.name || result.device?.deviceId?.slice(0, 8) || '??';
+
+            if (count % 10 === 0) setBleDeviceCount(count);
+
+            // Heavy debug for first 30 + every 100th
+            if (count <= 50 || count % 50 === 0) {
+              let logMsg = '#' + count + ' ' + name + ' RSSI=' + rssi;
+
+              // Log result keys for first 5
+              if (count <= 5) {
+                const keys = Object.keys(result || {});
+                logMsg += ' keys=[' + keys.join(',') + ']';
+              }
+
+              // Log manufacturerData format
+              const mfData = result.manufacturerData;
+              if (mfData && typeof mfData === 'object') {
+                const mfKeys = Object.keys(mfData);
+                logMsg += ' mf={' + mfKeys.length + ' keys: ' + mfKeys.slice(0, 3).join(',') + '}';
+                for (const [cid, val] of Object.entries(mfData)) {
+                  if (val instanceof DataView) {
+                    const hex = [];
+                    for (let i = 0; i < Math.min(val.byteLength, 25); i++) hex.push(val.getUint8(i).toString(16).padStart(2, '0'));
+                    logMsg += ' [' + cid + ':DV:' + hex.join(' ') + ']';
+                  } else if (val instanceof ArrayBuffer) {
+                    const arr = new Uint8Array(val);
+                    const hex = Array.from(arr.slice(0, 25)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+                    logMsg += ' [' + cid + ':AB:' + hex + ']';
+                  } else if (typeof val === 'string') {
+                    logMsg += ' [' + cid + ':STR:len=' + val.length + ':' + val.slice(0, 30) + ']';
+                  } else {
+                    logMsg += ' [' + cid + ':type=' + typeof val + ']';
+                  }
+                }
+              } else if (mfData) {
+                logMsg += ' mfData=type:' + typeof mfData;
+              } else {
+                logMsg += ' mfData=null';
+              }
+
+              if (result.rawAdvertisement) {
+                const raw = result.rawAdvertisement;
+                if (raw instanceof DataView) {
+                  const hex = [];
+                  for (let i = 0; i < Math.min(raw.byteLength, 30); i++) hex.push(raw.getUint8(i).toString(16).padStart(2, '0'));
+                  logMsg += ' raw=' + hex.join(' ');
                 }
               }
-            } else {
-              // Fallback: search all keys for iBeacon 0x02 0x15 pattern
-              for (const [key, dataView] of Object.entries(mfData)) {
-                if (!dataView || dataView.byteLength < 23) continue;
-                for (let i = 0; i <= Math.min(dataView.byteLength - 22, 4); i++) {
-                  if (dataView.getUint8(i) === 0x02 && dataView.getUint8(i + 1) === 0x15) {
-                    const major = (dataView.getUint8(i + 18) << 8) | dataView.getUint8(i + 19);
-                    const minor = (dataView.getUint8(i + 20) << 8) | dataView.getUint8(i + 21);
-                    console.log('[BLE] iBeacon via fallback key', key, 'Major:', major, 'Minor:', minor);
-                    const beacon = BEACONS.find(b => b.minor === minor);
+
+              addLog(logMsg);
+            }
+
+            // Parse iBeacon from manufacturerData
+            const mfData = result.manufacturerData;
+            if (mfData && typeof mfData === 'object') {
+              for (const [companyId, dataVal] of Object.entries(mfData)) {
+                let bytes;
+                try {
+                  if (dataVal instanceof DataView) {
+                    bytes = new Uint8Array(dataVal.buffer, dataVal.byteOffset, dataVal.byteLength);
+                  } else if (dataVal instanceof ArrayBuffer) {
+                    bytes = new Uint8Array(dataVal);
+                  } else if (typeof dataVal === 'string') {
+                    const binary = atob(dataVal);
+                    bytes = new Uint8Array(binary.length);
+                    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                  } else if (dataVal?.buffer) {
+                    bytes = new Uint8Array(dataVal.buffer);
+                  }
+                } catch (e) {
+                  if (count <= 5) addLog('Parse err ' + companyId + ': ' + e.message);
+                  continue;
+                }
+
+                if (!bytes || bytes.length < 4) continue;
+
+                for (let i = 0; i <= Math.min(bytes.length - 22, 10); i++) {
+                  if (bytes[i] === 0x02 && bytes[i + 1] === 0x15 && i + 22 <= bytes.length) {
+                    const major = (bytes[i + 18] << 8) | bytes[i + 19];
+                    const minor = (bytes[i + 20] << 8) | bytes[i + 21];
+                    addLog('BEACON FOUND! major=' + major + ' minor=' + minor + ' RSSI=' + rssi);
+                    const beacon = BEACONS.find(b => b.minor === minor && b.major === major);
                     if (beacon) {
-                      beaconRSSI.current[minor] = { rssi, nodeId: beacon.nodeId, label: beacon.label, timestamp: Date.now() };
+                      const smoothed = smoothRSSI(beacon.id, rssi);
+                      beaconRSSI.current[beacon.id] = {
+                        rssi, smoothed, nodeId: beacon.nodeId,
+                        label: beacon.label, timestamp: Date.now(),
+                      };
+                      setBleDebug(beacon.label + ': RSSI ' + rssi + ' (avg ' + smoothed.toFixed(0) + ')');
+                      updateBeaconPosition();
+                    }
+                    break;
+                  }
+                }
+              }
+            }
+
+            // Name-based detection
+            if (name && (name.includes('BC') || name.includes('Beacon') || name.includes('KBeacon') || name.includes('Pro'))) {
+              addLog('NAMED: ' + name + ' RSSI=' + rssi);
+            }
+
+            // FALLBACK: Parse rawAdvertisement for iBeacon if manufacturerData didn't find it
+            if (result.rawAdvertisement) {
+              let rawBytes;
+              const raw = result.rawAdvertisement;
+              if (raw instanceof DataView) {
+                rawBytes = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+              } else if (raw instanceof ArrayBuffer) {
+                rawBytes = new Uint8Array(raw);
+              }
+
+              if (rawBytes && rawBytes.length >= 25) {
+                // Search entire raw data for 02 15 (iBeacon marker)
+                for (let i = 0; i <= rawBytes.length - 23; i++) {
+                  if (rawBytes[i] === 0x02 && rawBytes[i + 1] === 0x15 && i + 22 <= rawBytes.length) {
+                    const major = (rawBytes[i + 18] << 8) | rawBytes[i + 19];
+                    const minor = (rawBytes[i + 20] << 8) | rawBytes[i + 21];
+                    const beacon = BEACONS.find(b => b.minor === minor && b.major === major);
+                    if (beacon) {
+                      addLog('RAW BEACON HIT! ' + beacon.label + ' major=' + major + ' minor=' + minor + ' RSSI=' + rssi);
+                      const smoothed = smoothRSSI(beacon.id, rssi);
+                      beaconRSSI.current[beacon.id] = {
+                        rssi, smoothed, nodeId: beacon.nodeId,
+                        label: beacon.label, timestamp: Date.now(),
+                      };
+                      setBleDebug(beacon.label + ': RSSI ' + rssi + ' (avg ' + smoothed.toFixed(0) + ')');
+                      updateBeaconPosition();
                     }
                     break;
                   }
@@ -649,40 +992,119 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
               }
             }
           }
+        );
 
-          // Determine strongest beacon (highest RSSI = closest)
-          const now = Date.now();
-          let strongest = null;
-          let strongestRSSI = -999;
-          Object.entries(beaconRSSI.current).forEach(([minor, data]) => {
-            // Only consider beacons seen in last 5 seconds
-            if (now - data.timestamp < 5000 && data.rssi > strongestRSSI) {
-              strongestRSSI = data.rssi;
-              strongest = data.nodeId;
+
+        setBleScanning(true);
+        setBleDebug('Native scanning active!');
+        speak('Scanning started.');
+        addLog('Native BLE scan running ✓');
+        return;
+      }
+
+      // =============================================
+      // METHOD 2: Web Bluetooth (browser on dad's phone)
+      // =============================================
+      if (!navigator.bluetooth) {
+        setBleDebug('Bluetooth not supported.');
+        return;
+      }
+
+      if (navigator.bluetooth.requestLEScan) {
+        addLog('Using Web Bluetooth requestLEScan');
+
+        const abortController = new AbortController();
+        bleScanAbortRef.current = abortController;
+
+        await navigator.bluetooth.requestLEScan({
+          acceptAllAdvertisements: true,
+          signal: abortController.signal,
+        });
+
+        addLog('Scan started! Listening for advertisements...');
+
+        const listener = (event) => {
+          adCountRef.current += 1;
+          const count = adCountRef.current;
+          const name = event.device?.name || event.device?.id?.slice(0, 8) || '??';
+          const rssi = event.rssi;
+          const mfSize = event.manufacturerData?.size || 0;
+
+          if (count <= 20 || count % 50 === 0) {
+            let logMsg = '#' + count + ' ' + name + ' RSSI=' + rssi + ' mfData=' + mfSize;
+            if (event.manufacturerData) {
+              for (const [cid, dv] of event.manufacturerData) {
+                logMsg += ' [0x' + cid.toString(16) + ': ' + dvToHex(dv) + ']';
+              }
             }
-          });
-
-          if (strongest && strongest !== currentBeaconNode) {
-            setCurrentBeaconNode(strongest);
-            // Auto-set as starting position — no manual tap needed
-            setSelectedStart(strongest);
-            // Announce which beacon we're near
-            const b = BEACONS.find(b => b.nodeId === strongest);
-            if (b) speak('Near ' + b.label.split('—')[1]?.trim() || 'beacon');
+            addLog(logMsg);
           }
-        }
-      );
+
+          if (count % 10 === 0) setBleDeviceCount(count);
+
+          const parsed = parseBeaconFromAd(event);
+          if (parsed) {
+            const beacon = BEACONS.find(b => b.minor === parsed.minor && b.major === parsed.major);
+            if (beacon) {
+              const smoothed = smoothRSSI(beacon.id, parsed.rssi);
+              beaconRSSI.current[beacon.id] = {
+                rssi: parsed.rssi, smoothed,
+                nodeId: beacon.nodeId, label: beacon.label, timestamp: Date.now(),
+              };
+              setBleDebug(beacon.label + ': RSSI ' + parsed.rssi + ' (avg ' + smoothed.toFixed(0) + ') via ' + parsed.method);
+              updateBeaconPosition();
+            }
+          }
+
+          if (!parsed && name && (name.includes('BC') || name.includes('Beacon') || name.includes('Blue') || name.includes('KBeacon'))) {
+            addLog('Known device: ' + name + ' RSSI=' + rssi + ' (no iBeacon data)');
+          }
+        };
+
+        bleListenerRef.current = listener;
+        navigator.bluetooth.addEventListener('advertisementreceived', listener);
+
+        setBleScanning(true);
+        setBleDebug('Scanning... walk around');
+        speak('Scanning started.');
+
+      } else {
+        addLog('requestLEScan NOT available');
+        setBleDebug('Enable "Experimental Web Platform features" in chrome://flags');
+      }
+
     } catch (err) {
-      console.error('BLE scan error:', err);
-      speak('Bluetooth scan failed. Make sure Bluetooth and Location are on.');
+      const msg = err?.message || String(err);
+      addLog('SCAN ERROR: ' + msg);
+      setBleDebug('Error: ' + msg);
+      speak('Scan failed. Make sure Bluetooth and Location are on.');
       setBleScanning(false);
     }
-  }, [currentBeaconNode]);
+  }, [bleScanning, updateBeaconPosition, parseBeaconFromAd, addLog]);
 
   const stopBLEScan = useCallback(async () => {
     try {
-      await BleClient.stopLEScan();
+      // Stop native Capacitor scan
+      const nativeBle = await getNativeBle();
+      if (nativeBle) {
+        try { await nativeBle.stopLEScan(); } catch (e) {}
+      }
+      // Stop Web Bluetooth scan
+      if (bleScanAbortRef.current) {
+        bleScanAbortRef.current.abort();
+        bleScanAbortRef.current = null;
+      }
+      if (bleListenerRef.current) {
+        navigator.bluetooth?.removeEventListener('advertisementreceived', bleListenerRef.current);
+        bleListenerRef.current = null;
+      }
+      beaconRSSI.current = {};
+      beaconSmoothed.current = {};
+      adCountRef.current = 0;
       setBleScanning(false);
+      setCurrentBeaconNode(null);
+      setBleDebug('');
+      setBleLog([]);
       speak('Scanning stopped.');
     } catch (e) {
       setBleScanning(false);
@@ -690,60 +1112,16 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
   }, []);
 
   // ============================================================
-  // MOVE BLUE DOT TO BEACON POSITION
+  // CAMERA FOLLOW when beacon position changes
+  // Blue dot movement is handled by moveBlueDot() in updateBeaconPosition
   // ============================================================
   useEffect(() => {
-    if (!currentBeaconNode || !blueDotRef.current) return;
-    const node = NODES.find(n => n.id === currentBeaconNode);
-    if (!node) return;
-
-    // Move blue dot
-    blueDotRef.current.position.set(node.x, 0, -node.y);
-    blueDotRef.current.visible = true;
-
-    // Camera follow
-    if (followMode && cameraRef.current) {
-      const cam = cameraRef.current;
-      const targetX = node.x;
-      const targetZ = -node.y;
-      // Smooth camera follow — position camera above and behind
-      cam.position.set(targetX, 35, targetZ + 25);
-      cam.lookAt(targetX, 0, targetZ);
-    }
+    if (!currentBeaconNode || !followMode || !cameraRef.current) return;
+    const pos = interpolatedPos.current;
+    const cam = cameraRef.current;
+    cam.position.set(pos.x, 35, -pos.y + 25);
+    cam.lookAt(pos.x, 0, -pos.y);
   }, [currentBeaconNode, followMode]);
-
-  // Create persistent blue dot — created once when scene is ready, always available
-  useEffect(() => {
-    const scene = sceneRef.current;
-    if (!scene) return;
-    if (blueDotRef.current) return; // already created
-
-    const group = new THREE.Group();
-    const dotGeo = new THREE.SphereGeometry(0.6, 16, 16);
-    const dotMat = new THREE.MeshStandardMaterial({
-      color: 0x2288ff, emissive: 0x1166dd, emissiveIntensity: 0.7,
-    });
-    const dot = new THREE.Mesh(dotGeo, dotMat);
-    dot.position.y = 0.6;
-    group.add(dot);
-
-    const ringGeo = new THREE.RingGeometry(0.8, 1.1, 24);
-    const ringMat = new THREE.MeshBasicMaterial({
-      color: 0x44aaff, side: THREE.DoubleSide, transparent: true, opacity: 0.4,
-    });
-    const ring = new THREE.Mesh(ringGeo, ringMat);
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.y = 0.05;
-    group.add(ring);
-
-    const light = new THREE.PointLight(0x2288ff, 1.0, 6);
-    light.position.y = 1;
-    group.add(light);
-
-    group.visible = false;
-    scene.add(group);
-    blueDotRef.current = group;
-  }, [sceneRef.current]);
 
   // ============================================================
   // UPDATE NODES
@@ -851,21 +1229,20 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     const scene = sceneRef.current;
     if (!scene) return;
 
-    // Cleanup old markers — but DON'T wipe blueDot if BLE is controlling it
+    // Cleanup old markers (skip blueDot when scanning — beacon effect handles it)
     [startMarkerRef, endMarkerRef].forEach(ref => {
       if (ref.current) {
         scene.remove(ref.current);
         ref.current = null;
       }
     });
-    // Only wipe and recreate blueDot if BLE is NOT scanning (manual tap mode)
     if (!bleScanning && blueDotRef.current) {
       scene.remove(blueDotRef.current);
       blueDotRef.current = null;
     }
 
-    // Blue dot at start
-    if (selectedStart) {
+    // Blue dot at start (only when NOT scanning — scanning has its own dot)
+    if (selectedStart && !bleScanning) {
       const node = NODES.find(n => n.id === selectedStart);
       if (node) {
         const group = new THREE.Group();
@@ -933,7 +1310,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
         endMarkerRef.current = group;
       }
     }
-  }, [selectedStart, selectedEnd, emergencyMode]);
+  }, [selectedStart, selectedEnd, emergencyMode, bleScanning]);
 
   // ============================================================
   // UPDATE FIRE MARKERS
@@ -1127,10 +1504,11 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
   // ACTIONS
   // ============================================================
   const simulateFire = () => {
-    setBlockedEdges([
-      { from: 'NODE_NC_3', to: 'NODE_NC_E' },
-      { from: 'NODE_NC_E', to: 'NODE_EW_MID' },
-    ]);
+    // Pick a random fire zone from building data
+    const zoneKeys = FIRE_ZONES ? Object.keys(FIRE_ZONES) : [];
+    if (zoneKeys.length === 0) return;
+    const zone = FIRE_ZONES[zoneKeys[Math.floor(Math.random() * zoneKeys.length)]];
+    setBlockedEdges(zone.blockedEdges || []);
     setEmergencyMode(true);
   };
 
@@ -1144,7 +1522,6 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     setDirections([]);
     setCurrentStep(0);
     window.speechSynthesis?.cancel();
-    if (nativeTTS) nativeTTS.stop().catch(() => {});
     stopVibration();
   };
 
@@ -1195,7 +1572,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
               className={`toolbar-btn ${bleScanning ? 'active' : ''}`}
               onClick={() => bleScanning ? stopBLEScan() : startBLEScan()}
             >
-              {bleScanning ? '📡' : '📡'} {bleScanning ? 'Scanning' : 'Scan'}
+              📡 {bleScanning ? 'Stop Scan' : 'Scan'}
             </button>
             <button
               className={`toolbar-btn ${followMode ? 'active' : ''}`}
@@ -1222,12 +1599,46 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
         <div className="emergency-banner">🚨 EMERGENCY — FIRE DETECTED — REROUTING 🚨</div>
       )}
 
-      {/* BEACON STATUS */}
+      {/* BEACON STATUS + DEBUG PANEL */}
       {bleScanning && (
         <div className="beacon-status">
           📡 {currentBeaconNode
             ? `Near: ${BEACONS.find(b => b.nodeId === currentBeaconNode)?.label || currentBeaconNode}`
-            : 'Scanning for beacons...'}
+            : `Scanning... (${bleDeviceCount} ads received)`}
+          {bleDebug && <div style={{fontSize: '0.65rem', opacity: 0.7, marginTop: 2}}>{bleDebug}</div>}
+          <button
+            onClick={() => setShowBleDebug(!showBleDebug)}
+            style={{position:'absolute',right:8,top:8,background:'#333',color:'#fff',border:'none',borderRadius:4,padding:'2px 8px',fontSize:'0.6rem'}}
+          >
+            {showBleDebug ? 'Hide Log' : 'Show Log'}
+          </button>
+        </div>
+      )}
+      {!bleScanning && bleDebug && (
+        <div className="beacon-status" style={{background: '#3a1a1a'}}>
+          ⚠️ {bleDebug}
+        </div>
+      )}
+
+      {/* BLE DEBUG LOG */}
+      {showBleDebug && bleLog.length > 0 && (
+        <div style={{
+          position:'fixed', bottom:0, left:0, right:0,
+          maxHeight:'40vh', overflow:'auto',
+          background:'rgba(0,0,0,0.92)', color:'#0f0',
+          fontFamily:'monospace', fontSize:'0.55rem', lineHeight:1.3,
+          padding:'8px', zIndex:9999,
+          borderTop:'2px solid #0f0',
+        }}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+            <span style={{color:'#ff0',fontWeight:'bold'}}>BLE DEBUG LOG ({bleLog.length} entries, {bleDeviceCount} ads)</span>
+            <button onClick={() => setBleLog([])} style={{background:'#600',color:'#fff',border:'none',borderRadius:3,padding:'1px 6px',fontSize:'0.55rem'}}>Clear</button>
+          </div>
+          {bleLog.map((entry, i) => (
+            <div key={i} style={{borderBottom:'1px solid #222',padding:'1px 0'}}>
+              <span style={{color:'#666'}}>{new Date(entry.t).toLocaleTimeString()}:</span> {entry.msg}
+            </div>
+          ))}
         </div>
       )}
 
@@ -1257,7 +1668,11 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
 
       {/* INSTRUCTIONS */}
       {mode === 'navigate' && !selectedStart && !emergencyMode && (
-        <div className="map-instructions">Tap a node to set your <strong>starting point</strong></div>
+        <div className="map-instructions">
+          {bleScanning
+            ? (currentBeaconNode ? <>Position set from beacon. Tap a <strong>destination</strong>, or press 🔥</> : 'Walk near a beacon, or tap a node manually')
+            : <>Tap a node to set your <strong>starting point</strong></>}
+        </div>
       )}
       {mode === 'navigate' && selectedStart && !selectedEnd && !emergencyMode && (
         <div className="map-instructions">Now tap a <strong>destination</strong>, or press 🔥 for emergency</div>

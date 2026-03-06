@@ -415,18 +415,6 @@ body {
   50% { opacity: 0.7; }
 }
 
-/* BEACON STATUS BAR */
-.beacon-status {
-  padding: 6px 12px;
-  background: linear-gradient(90deg, #1a3a5c, #1e4a6e);
-  color: #44aaff;
-  text-align: center;
-  font-size: 0.78rem;
-  font-weight: 600;
-  flex-shrink: 0;
-  border-bottom: 1px solid #2a4a6a;
-}
-
 /* DIRECTION BAR */
 .direction-bar {
   display: flex;

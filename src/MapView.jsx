@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { BUILDING, NODES, EDGES, ZONES, CORRIDORS, WALLS } from './data/buildingData';
+import { BUILDING, NODES, EDGES, ZONES, CORRIDORS, WALLS, FIRE_ZONES } from './data/buildingData';
 import { dijkstra, findNearestExit, generateDirections } from './pathfinding';
 
 // ============================================================
@@ -553,10 +553,10 @@ export default function MapView({ profile, mode = 'navigate' }) {
   // ACTIONS
   // ============================================================
   const simulateFire = () => {
-    setBlockedEdges([
-      { from: 'NODE_NC_3', to: 'NODE_NC_E' },
-      { from: 'NODE_NC_E', to: 'NODE_EW_MID' },
-    ]);
+    const zoneKeys = FIRE_ZONES ? Object.keys(FIRE_ZONES) : [];
+    if (zoneKeys.length === 0) return;
+    const zone = FIRE_ZONES[zoneKeys[Math.floor(Math.random() * zoneKeys.length)]];
+    setBlockedEdges(zone.blockedEdges || []);
     setEmergencyMode(true);
   };
 
