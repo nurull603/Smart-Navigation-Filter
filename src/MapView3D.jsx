@@ -34,9 +34,35 @@ function cssToHex(css) {
 }
 
 // ============================================================
-// VOICE ENGINE — uses Web Speech API
+// VOICE ENGINE — uses Capacitor TTS in app, Web Speech in browser
 // ============================================================
+let NativeTTS = null;
+let nativeTTSChecked = false;
+async function getNativeTTS() {
+  if (nativeTTSChecked) return NativeTTS;
+  nativeTTSChecked = true;
+  try {
+    const mod = await import('@capacitor-community/text-to-speech');
+    NativeTTS = mod.TextToSpeech;
+  } catch (e) {}
+  return NativeTTS;
+}
+// Eagerly load on startup
+getNativeTTS();
+
 function speak(text) {
+  // Try native TTS first (Capacitor app)
+  if (NativeTTS) {
+    NativeTTS.speak({
+      text,
+      lang: 'en-US',
+      rate: 0.95,
+      volume: 1.0,
+    }).catch(() => {
+      webSpeak(text);
+    });
+    return;
+  }
   webSpeak(text);
 }
 
@@ -102,23 +128,14 @@ function generateVoiceDirections(path, nodes) {
 
   const directions = [];
 
-  // First instruction
-  const startNode = nodeMap[path[0]];
-  const secondNode = nodeMap[path[1]];
-  const startDx = secondNode.x - startNode.x;
-  const startDy = secondNode.y - startNode.y;
-  let startDir = '';
-  if (Math.abs(startDx) > Math.abs(startDy)) {
-    startDir = startDx > 0 ? 'east' : 'west';
-  } else {
-    startDir = startDy > 0 ? 'north' : 'south';
-  }
-
+  // First instruction — no compass, just "route started"
   directions.push({
-    text: `Route calculated. Head ${startDir}.`,
+    text: 'Route started. Follow the path.',
     nodeId: path[0],
     type: 'start',
   });
+
+  let lastType = 'start'; // track last direction to avoid repeating "continue straight"
 
   for (let i = 1; i < path.length; i++) {
     const prev = nodeMap[path[i - 1]];
@@ -141,9 +158,10 @@ function generateVoiceDirections(path, nodes) {
     // Last node = arrival
     if (i === path.length - 1) {
       const label = curr.label || curr.type;
-      let arriveText = `You have arrived at ${label}.`;
-      if (nodeType === 'exit') arriveText = `You have reached ${label}. Exit the building now.`;
-      if (nodeType === 'refuge') arriveText = `You have reached the refuge area. Help is on the way.`;
+      let arriveText = `You have arrived.`;
+      if (nodeType === 'exit') arriveText = `You've reached the exit.`;
+      if (nodeType === 'refuge') arriveText = `You've reached the refuge area. Help is on the way.`;
+      if (label && nodeType !== 'exit' && nodeType !== 'refuge') arriveText = `You have arrived at ${label}.`;
       directions.push({
         text: arriveText,
         nodeId: path[i],
@@ -156,36 +174,39 @@ function generateVoiceDirections(path, nodes) {
     if (next) {
       const dx2 = next.x - curr.x;
       const dy2 = next.y - curr.y;
-
-      // Cross product for turn direction
       const cross = dx * dy2 - dy * dx2;
-      // Dot product to check if continuing straight
       const dot = dx * dx2 + dy * dy2;
 
       if (Math.abs(cross) < 0.5 && dot > 0) {
-        // Straight
+        // Straight — only announce if there's a special landmark or it's been a while
         if (specialText) {
           directions.push({ text: specialText, nodeId: path[i], type: 'special' });
-        } else {
-          directions.push({ text: 'Continue straight.', nodeId: path[i], type: 'straight' });
+          lastType = 'special';
         }
+        // Skip "continue straight" unless last direction was a turn (confirms they turned correctly)
+        else if (lastType === 'left' || lastType === 'right') {
+          directions.push({ text: 'Keep going straight.', nodeId: path[i], type: 'straight' });
+          lastType = 'straight';
+        }
+        // Otherwise skip — no need to spam "continue straight" every node
       } else if (cross > 0.5) {
         directions.push({
           text: specialText || 'Turn left.',
           nodeId: path[i],
           type: 'left',
         });
+        lastType = 'left';
       } else if (cross < -0.5) {
         directions.push({
           text: specialText || 'Turn right.',
           nodeId: path[i],
           type: 'right',
         });
+        lastType = 'right';
       } else {
         if (specialText) {
           directions.push({ text: specialText, nodeId: path[i], type: 'special' });
-        } else {
-          directions.push({ text: 'Continue straight.', nodeId: path[i], type: 'straight' });
+          lastType = 'special';
         }
       }
     }
@@ -250,6 +271,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
   const currentBeaconRef = useRef(null);
   const adCountRef = useRef(0);
   const interpolatedPos = useRef({ x: 0, y: 0 });
+  const lastSpeakTime = useRef(0); // cooldown to prevent voice spam
 
   // Refs for dynamic 3D objects
   const routeGroupRef = useRef(null);
@@ -890,13 +912,17 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       moveBlueDot(pos.x, pos.y);
     }
 
-    // Announce room change
+    // Announce room change (with 5 second cooldown to prevent spam)
     if (nearestNodeId && nearestNodeId !== currentBeaconRef.current) {
       currentBeaconRef.current = nearestNodeId;
       setCurrentBeaconNode(nearestNodeId);
       setSelectedStart(nearestNodeId);
       const shortLabel = nearestLabel?.split('—')[1]?.trim() || nearestLabel || nearestNodeId;
-      speak('You are near ' + shortLabel);
+      const now = Date.now();
+      if (now - lastSpeakTime.current > 5000) {
+        speak('Near ' + shortLabel);
+        lastSpeakTime.current = now;
+      }
       addLog('MOVED to ' + shortLabel);
     }
   }, [addLog]);
@@ -1614,6 +1640,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     setDirections([]);
     setCurrentStep(0);
     window.speechSynthesis?.cancel();
+    if (NativeTTS) NativeTTS.stop().catch(() => {});
     stopVibration();
   };
 
