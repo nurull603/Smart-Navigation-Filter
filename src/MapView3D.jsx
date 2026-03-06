@@ -692,23 +692,78 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     return beaconSmoothed.current[beaconId];
   };
 
-  // Path waypoints between Beacon 1 (Living Room) and Beacon 2 (Bedroom)
-  const BEACON_PATH = [
-    { id: 'LIVING_C',     x: 9,  y: 7 },   // ratio 0.0
-    { id: 'LIVING_S',     x: 9,  y: 0 },   // ratio 0.25
-    { id: 'HALL',          x: -2, y: 0 },   // ratio 0.50
-    { id: 'BEDROOM_DOOR', x: -3, y: 3 },   // ratio 0.75
-    { id: 'BEDROOM_C',    x: -9, y: 8 },   // ratio 1.0
+  // L-shaped hallway path segments between adjacent beacons (7 beacons, 6 segments)
+  // Order: B1(V_30) → B5(V_16) → B2(V_00) → B3(H_ELEV) → B6(H_35) → B7(H_45) → B4(H_FAR)
+  const BEACON_SEGMENTS = [
+    { // Segment 0: BEACON_1 → BEACON_5 (study room to mid vertical)
+      from: 'BEACON_1', to: 'BEACON_5',
+      waypoints: [
+        { x: 0, y: 30 },    // V_30
+        { x: 0, y: 26.25 }, // V_S1
+        { x: 0, y: 20 },    // V_20
+        { x: 0, y: 16 },    // V_16
+      ],
+    },
+    { // Segment 1: BEACON_5 → BEACON_2 (mid vertical to junction)
+      from: 'BEACON_5', to: 'BEACON_2',
+      waypoints: [
+        { x: 0, y: 16 },    // V_16
+        { x: 0, y: 12 },    // V_12
+        { x: 0, y: 8 },     // V_08
+        { x: 0, y: 4 },     // V_04
+        { x: 0, y: 0 },     // V_00
+      ],
+    },
+    { // Segment 2: BEACON_2 → BEACON_3 (junction to elevator)
+      from: 'BEACON_2', to: 'BEACON_3',
+      waypoints: [
+        { x: 0, y: 0 },     // V_00
+        { x: 5, y: 0 },     // H_05
+        { x: 10, y: 0 },    // H_10
+        { x: 15, y: 0 },    // H_15
+        { x: 21, y: 0 },    // H_ELEV
+      ],
+    },
+    { // Segment 3: BEACON_3 → BEACON_6 (elevator to mid horizontal)
+      from: 'BEACON_3', to: 'BEACON_6',
+      waypoints: [
+        { x: 21, y: 0 },    // H_ELEV
+        { x: 25, y: 0 },    // H_25
+        { x: 30, y: 0 },    // H_30
+        { x: 35, y: 0 },    // H_35
+      ],
+    },
+    { // Segment 4: BEACON_6 → BEACON_7 (mid horizontal to near stairs 2)
+      from: 'BEACON_6', to: 'BEACON_7',
+      waypoints: [
+        { x: 35, y: 0 },    // H_35
+        { x: 40, y: 0 },    // H_40
+        { x: 45, y: 0 },    // H_45
+      ],
+    },
+    { // Segment 5: BEACON_7 → BEACON_4 (near stairs 2 to far end)
+      from: 'BEACON_7', to: 'BEACON_4',
+      waypoints: [
+        { x: 45, y: 0 },    // H_45
+        { x: 51.5, y: 0 },  // H_S2
+        { x: 57.25, y: 0 }, // H_FAR
+      ],
+    },
   ];
 
-  const getInterpolatedPosition = (ratio) => {
+  // Ordered beacon IDs along the path
+  const BEACON_ORDER = ['BEACON_1', 'BEACON_5', 'BEACON_2', 'BEACON_3', 'BEACON_6', 'BEACON_7', 'BEACON_4'];
+
+  // Interpolate position along a segment's waypoints
+  const getSegmentPosition = (segment, ratio) => {
     const clamped = Math.max(0, Math.min(1, ratio));
-    const totalSegments = BEACON_PATH.length - 1;
-    const segment = clamped * totalSegments;
-    const idx = Math.floor(segment);
-    const frac = segment - idx;
-    const from = BEACON_PATH[Math.min(idx, totalSegments)];
-    const to = BEACON_PATH[Math.min(idx + 1, totalSegments)];
+    const wp = segment.waypoints;
+    const totalSegs = wp.length - 1;
+    const pos = clamped * totalSegs;
+    const idx = Math.floor(pos);
+    const frac = pos - idx;
+    const from = wp[Math.min(idx, totalSegs)];
+    const to = wp[Math.min(idx + 1, totalSegs)];
     return {
       x: from.x + (to.x - from.x) * frac,
       y: from.y + (to.y - from.y) * frac,
@@ -749,64 +804,101 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     blueDotRef.current = group;
   };
 
-  // Determine position from RSSI ratio and slide dot along path
+  // Determine position from RSSI of up to 4 beacons and slide dot along L-path
   const updateBeaconPosition = useCallback(() => {
     const now = Date.now();
-    const b1 = beaconRSSI.current['BEACON_1']; // Living room
-    const b2 = beaconRSSI.current['BEACON_2']; // Bedroom
 
-    if (!b1 && !b2) return;
+    // Gather all active beacons with smoothed RSSI
+    const active = [];
+    for (const bid of BEACON_ORDER) {
+      const data = beaconRSSI.current[bid];
+      if (data && now - data.timestamp < 12000) {
+        active.push({
+          id: bid,
+          rssi: beaconSmoothed.current[bid] || data.rssi,
+          nodeId: data.nodeId,
+          label: data.label,
+          orderIdx: BEACON_ORDER.indexOf(bid),
+        });
+      }
+    }
 
-    // Only one beacon heard — place at that beacon
-    if (!b1 || now - b1.timestamp > 12000) {
-      const pos = getInterpolatedPosition(1.0);
+    if (active.length === 0) return;
+
+    // Sort by signal strength (strongest first)
+    active.sort((a, b) => b.rssi - a.rssi);
+
+    let pos;
+    let nearestNodeId;
+    let nearestLabel;
+
+    if (active.length === 1) {
+      // Only one beacon — place at that beacon's node
+      const b = active[0];
+      const node = NODES.find(n => n.id === b.nodeId);
+      if (node) {
+        pos = { x: node.x, y: node.y };
+        nearestNodeId = b.nodeId;
+        nearestLabel = b.label;
+      }
+    } else {
+      // Find the two strongest beacons
+      const b1 = active[0];
+      const b2 = active[1];
+
+      // Check if they are adjacent on the path
+      const idx1 = Math.min(b1.orderIdx, b2.orderIdx);
+      const idx2 = Math.max(b1.orderIdx, b2.orderIdx);
+      const segIdx = idx2 - idx1 === 1 ? idx1 : -1;
+
+      if (segIdx >= 0 && segIdx < BEACON_SEGMENTS.length) {
+        // Adjacent beacons — interpolate along segment
+        const seg = BEACON_SEGMENTS[segIdx];
+        const fromBeacon = seg.from === b1.id ? b1 : b2;
+        const toBeacon = seg.to === b1.id ? b1 : b2;
+
+        // ratio: 0 = at "from" beacon, 1 = at "to" beacon
+        const diff = toBeacon.rssi - fromBeacon.rssi;
+        const ratio = Math.max(0, Math.min(1, 0.5 + (diff / 50)));
+        pos = getSegmentPosition(seg, ratio);
+
+        // Determine nearest beacon for voice
+        if (ratio < 0.35) {
+          nearestNodeId = fromBeacon.nodeId;
+          nearestLabel = fromBeacon.label;
+        } else if (ratio > 0.65) {
+          nearestNodeId = toBeacon.nodeId;
+          nearestLabel = toBeacon.label;
+        }
+
+        setBleDebug(fromBeacon.label.split('—')[1]?.trim() + ': ' + fromBeacon.rssi.toFixed(0) +
+          ' | ' + toBeacon.label.split('—')[1]?.trim() + ': ' + toBeacon.rssi.toFixed(0) +
+          ' | pos: ' + (ratio * 100).toFixed(0) + '%');
+      } else {
+        // Not adjacent — use strongest beacon position
+        const node = NODES.find(n => n.id === b1.nodeId);
+        if (node) {
+          pos = { x: node.x, y: node.y };
+          nearestNodeId = b1.nodeId;
+          nearestLabel = b1.label;
+        }
+      }
+    }
+
+    if (pos) {
       interpolatedPos.current = pos;
       moveBlueDot(pos.x, pos.y);
-      if (currentBeaconRef.current !== 'BEDROOM_C') {
-        currentBeaconRef.current = 'BEDROOM_C';
-        setCurrentBeaconNode('BEDROOM_C');
-        setSelectedStart('BEDROOM_C');
-        speak('You are near Bedroom');
-        addLog('At Bedroom (only beacon heard)');
-      }
-      return;
-    }
-    if (!b2 || now - b2.timestamp > 12000) {
-      const pos = getInterpolatedPosition(0.0);
-      interpolatedPos.current = pos;
-      moveBlueDot(pos.x, pos.y);
-      if (currentBeaconRef.current !== 'LIVING_C') {
-        currentBeaconRef.current = 'LIVING_C';
-        setCurrentBeaconNode('LIVING_C');
-        setSelectedStart('LIVING_C');
-        speak('You are near Living Room');
-        addLog('At Living Room (only beacon heard)');
-      }
-      return;
     }
 
-    // Both beacons heard — slide dot based on signal ratio
-    const rssi1 = beaconSmoothed.current['BEACON_1'] || b1.rssi;
-    const rssi2 = beaconSmoothed.current['BEACON_2'] || b2.rssi;
-    const diff = rssi2 - rssi1;
-    const ratio = Math.max(0, Math.min(1, 0.5 + (diff / 60)));
-
-    const pos = getInterpolatedPosition(ratio);
-    interpolatedPos.current = pos;
-    moveBlueDot(pos.x, pos.y);
-
-    // Only announce room when clearly in one (not in hallway)
-    const nearestNode = ratio < 0.35 ? 'LIVING_C' : ratio > 0.65 ? 'BEDROOM_C' : null;
-    if (nearestNode && nearestNode !== currentBeaconRef.current) {
-      currentBeaconRef.current = nearestNode;
-      setCurrentBeaconNode(nearestNode);
-      setSelectedStart(nearestNode);
-      const label = nearestNode === 'LIVING_C' ? 'Living Room' : 'Bedroom';
-      speak('You are near ' + label);
-      addLog('MOVED to ' + label + ' (ratio: ' + ratio.toFixed(2) + ')');
+    // Announce room change
+    if (nearestNodeId && nearestNodeId !== currentBeaconRef.current) {
+      currentBeaconRef.current = nearestNodeId;
+      setCurrentBeaconNode(nearestNodeId);
+      setSelectedStart(nearestNodeId);
+      const shortLabel = nearestLabel?.split('—')[1]?.trim() || nearestLabel || nearestNodeId;
+      speak('You are near ' + shortLabel);
+      addLog('MOVED to ' + shortLabel);
     }
-
-    setBleDebug('LR: ' + rssi1.toFixed(0) + ' | BR: ' + rssi2.toFixed(0) + ' | pos: ' + (ratio * 100).toFixed(0) + '%');
   }, [addLog]);
 
   const bleScanAbortRef = useRef(null);
