@@ -297,9 +297,8 @@ export const WALLS = [
   { x1: -(REF_W / 2), y1: -(HW + REF_D), x2:  (REF_W / 2), y2: -(HW + REF_D) },
 ];
 
-
 // ============================================================
-// FIRE ZONES (for fire simulation)
+// FIRE ZONES (for fire simulation / camera detection)
 // ============================================================
 export const FIRE_ZONES = {
   elevator: {

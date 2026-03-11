@@ -2,6 +2,9 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { BUILDING, NODES, EDGES, ZONES, CORRIDORS, WALLS, BEACONS, FIRE_ZONES } from './data/buildingData';
 import { dijkstra, findNearestExit } from './pathfinding';
+// Firebase imports (for future Pi camera fire detection)
+import { db } from './firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
 
 // Native BLE (Capacitor) — lazy loaded, falls back to Web Bluetooth
 let NativeBle = null;
@@ -34,7 +37,7 @@ function cssToHex(css) {
 }
 
 // ============================================================
-// VOICE ENGINE — uses Capacitor TTS in app, Web Speech in browser
+// VOICE ENGINE — queued, calm, no overlapping
 // ============================================================
 let NativeTTS = null;
 let nativeTTSChecked = false;
@@ -47,23 +50,60 @@ async function getNativeTTS() {
   } catch (e) {}
   return NativeTTS;
 }
-// Eagerly load on startup
 getNativeTTS();
 
+let isSpeaking = false;
+const speakQueue = [];
+let speakTimeout = null;
+
 function speak(text) {
-  // Try native TTS first (Capacitor app)
+  // Drop if something is already queued — prevent pile-up
+  if (speakQueue.length >= 2) {
+    speakQueue.shift(); // drop oldest
+  }
+  speakQueue.push(text);
+  processQueue();
+}
+
+function processQueue() {
+  if (isSpeaking || speakQueue.length === 0) return;
+  isSpeaking = true;
+  const text = speakQueue.shift();
+
   if (NativeTTS) {
     NativeTTS.speak({
       text,
       lang: 'en-US',
-      rate: 0.95,
+      rate: 0.85,
       volume: 1.0,
+    }).then(() => {
+      // Small pause after speaking before next one
+      speakTimeout = setTimeout(() => {
+        isSpeaking = false;
+        processQueue();
+      }, 800);
     }).catch(() => {
+      isSpeaking = false;
       webSpeak(text);
+      speakTimeout = setTimeout(() => processQueue(), 800);
     });
     return;
   }
   webSpeak(text);
+  // Estimate speech duration (~80ms per character) + pause
+  const duration = Math.max(1500, text.length * 80) + 800;
+  speakTimeout = setTimeout(() => {
+    isSpeaking = false;
+    processQueue();
+  }, duration);
+}
+
+function stopSpeaking() {
+  speakQueue.length = 0;
+  isSpeaking = false;
+  if (speakTimeout) { clearTimeout(speakTimeout); speakTimeout = null; }
+  window.speechSynthesis?.cancel();
+  if (NativeTTS) NativeTTS.stop().catch(() => {});
 }
 
 function webSpeak(text) {
@@ -232,8 +272,8 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     rotX: Math.PI / 5,
     targetRotY: Math.PI / 4,
     targetRotX: Math.PI / 5,
-    distance: 55,
-    targetDistance: 55,
+    distance: 75,
+    targetDistance: 75,
     panX: 0,
     panZ: 0,
     targetPanX: 0,
@@ -252,6 +292,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     profile?.disabilities?.hearingImpaired ? true : false
   );
   const [showVibGuide, setShowVibGuide] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   const hearingImpaired = profile?.disabilities?.hearingImpaired || false;
 
@@ -261,17 +302,25 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
   const [showNodes, setShowNodes] = useState(true);
   const [bleScanning, setBleScanning] = useState(false);
   const [currentBeaconNode, setCurrentBeaconNode] = useState(null);
-  const [followMode, setFollowMode] = useState(false);
+  const [gpsFollow, setGpsFollow] = useState(true);
+  const gpsFollowRef = useRef(true);
   const [bleDebug, setBleDebug] = useState('');
   const [bleDeviceCount, setBleDeviceCount] = useState(0);
-  const [showBleDebug, setShowBleDebug] = useState(true);
   const [bleLog, setBleLog] = useState([]);
-  const beaconRSSI = useRef({});        // raw latest readings
-  const beaconSmoothed = useRef({});    // smoothed RSSI (rolling average)
+  const beaconRSSI = useRef({});
+  const beaconSmoothed = useRef({});
   const currentBeaconRef = useRef(null);
   const adCountRef = useRef(0);
   const interpolatedPos = useRef({ x: 0, y: 0 });
-  const lastSpeakTime = useRef(0); // cooldown to prevent voice spam
+  const targetDotPos = useRef({ x: 0, y: 0 });
+  const dotInitialized = useRef(false);
+  const prevPos = useRef({ x: 0, y: 0 });
+  const walkingAngle = useRef(0);
+  const lastSpeakTime = useRef(0);
+  const lastStepSpeakTime = useRef(0);
+
+  // Keep gpsFollow ref in sync with state
+  useEffect(() => { gpsFollowRef.current = gpsFollow; }, [gpsFollow]);
 
   // Refs for dynamic 3D objects
   const routeGroupRef = useRef(null);
@@ -306,30 +355,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       return;
     }
 
-    if (emergencyMode) {
-      const result = findNearestExit(selectedStart, NODES, EDGES, wheelchairMode, blockedEdges);
-      if (result) {
-        setCurrentPath(result.path);
-        const target = NODES.find(n => n.id === result.targetId);
-        setPathInfo({ distance: result.distance.toFixed(1), isRefuge: result.isRefuge, destination: target?.label || result.targetId });
-        const dirs = generateVoiceDirections(result.path, NODES);
-        setDirections(dirs);
-        setCurrentStep(0);
-        // Announce emergency
-        if (voiceEnabled) {
-          setTimeout(() => speak('Fire detected. Rerouting to nearest exit.'), 300);
-          setTimeout(() => { if (dirs.length > 0) speak(dirs[0].text); }, 2500);
-        }
-        if (vibrationEnabled) vibrateEmergency();
-      } else {
-        setCurrentPath(null);
-        setPathInfo({ error: 'No safe path available!' });
-        setDirections([]);
-        setCurrentStep(0);
-        if (voiceEnabled) speak('No safe path available.');
-        if (vibrationEnabled) vibrateEmergency();
-      }
-    } else if (selectedEnd) {
+    if (selectedEnd) {
       const result = dijkstra(selectedStart, selectedEnd, NODES, EDGES, wheelchairMode, blockedEdges);
       if (result) {
         setCurrentPath(result.path);
@@ -353,7 +379,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
         if (voiceEnabled) speak('No path available.');
       }
     }
-  }, [selectedStart, selectedEnd, wheelchairMode, emergencyMode, blockedEdges, mode]);
+  }, [selectedStart, selectedEnd, wheelchairMode, mode]);
 
   // ============================================================
   // NEXT STEP (simulate walking)
@@ -405,12 +431,20 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
   useEffect(() => {
     if (!currentBeaconNode || directions.length === 0) return;
 
-    // Check if current beacon matches any direction step AHEAD of current step
+    // Check if current beacon matches any direction step AHEAD
+    const now = Date.now();
+    const stepCooldown = now - lastStepSpeakTime.current > 6000;
+
     for (let i = currentStep + 1; i < directions.length; i++) {
       if (directions[i].nodeId === currentBeaconNode) {
         setCurrentStep(i);
-        if (voiceEnabled) speak(directions[i].text);
-        if (vibrationEnabled) vibrate(directions[i].type);
+        // Only speak turns, landmarks, arrival — not straights — and respect cooldown
+        const type = directions[i].type;
+        if (stepCooldown && (type === 'left' || type === 'right' || type === 'arrive' || type === 'special')) {
+          if (voiceEnabled) speak(directions[i].text);
+          if (vibrationEnabled) vibrate(type);
+          lastStepSpeakTime.current = now;
+        }
         break;
       }
     }
@@ -423,8 +457,12 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
           const dirNodeIdx = currentPath.indexOf(directions[i].nodeId);
           if (dirNodeIdx >= 0 && dirNodeIdx <= beaconIdx) {
             setCurrentStep(i);
-            if (voiceEnabled) speak(directions[i].text);
-            if (vibrationEnabled) vibrate(directions[i].type);
+            const type = directions[i].type;
+            if (stepCooldown && (type === 'left' || type === 'right' || type === 'arrive' || type === 'special')) {
+              if (voiceEnabled) speak(directions[i].text);
+              if (vibrationEnabled) vibrate(type);
+              lastStepSpeakTime.current = now;
+            }
             break;
           }
         }
@@ -442,11 +480,11 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     // --- SCENE ---
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0a0c12);
-    scene.fog = new THREE.Fog(0x0a0c12, 80, 150);
+    scene.fog = new THREE.Fog(0x0a0c12, 120, 250);
     sceneRef.current = scene;
 
     // --- CAMERA ---
-    const camera = new THREE.PerspectiveCamera(45, mount.clientWidth / mount.clientHeight, 0.1, 500);
+    const camera = new THREE.PerspectiveCamera(55, mount.clientWidth / mount.clientHeight, 0.1, 500);
     cameraRef.current = camera;
 
     // --- RENDERER ---
@@ -610,18 +648,81 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       frameRef.current = requestAnimationFrame(animate);
       const ctrl = controlsRef.current;
 
-      ctrl.rotY += (ctrl.targetRotY - ctrl.rotY) * 0.08;
-      ctrl.rotX += (ctrl.targetRotX - ctrl.rotX) * 0.08;
-      ctrl.distance += (ctrl.targetDistance - ctrl.distance) * 0.08;
-      ctrl.panX += (ctrl.targetPanX - ctrl.panX) * 0.08;
-      ctrl.panZ += (ctrl.targetPanZ - ctrl.panZ) * 0.08;
+      // SPEED-CAPPED DOT MOVEMENT — dot walks, never teleports
+      if (blueDotRef.current && dotInitialized.current) {
+        const target = targetDotPos.current;
+        const dot = blueDotRef.current;
+        const curX = dot.position.x;
+        const curZ = dot.position.z;
+        const tgtX = target.x;
+        const tgtZ = -target.y;
 
-      const cx = ctrl.panX + ctrl.distance * Math.sin(ctrl.rotY) * Math.cos(ctrl.rotX);
-      const cy = ctrl.distance * Math.sin(ctrl.rotX);
-      const cz = ctrl.panZ + ctrl.distance * Math.cos(ctrl.rotY) * Math.cos(ctrl.rotX);
+        const dx = tgtX - curX;
+        const dz = tgtZ - curZ;
+        const dist = Math.sqrt(dx * dx + dz * dz);
 
-      camera.position.set(cx, cy, cz);
-      camera.lookAt(ctrl.panX, 0, ctrl.panZ);
+        // Max speed: 0.35 units per frame — fast enough for large dorm hallways
+        const maxStep = 0.35;
+        let newX, newZ;
+        if (dist < maxStep) {
+          // Close enough — snap to target
+          newX = tgtX;
+          newZ = tgtZ;
+        } else {
+          // Move toward target at walking speed
+          const scale = maxStep / dist;
+          newX = curX + dx * scale;
+          newZ = curZ + dz * scale;
+        }
+
+        dot.position.set(newX, 0, newZ);
+        dot.visible = true;
+
+        // Feed camera with dot position (no angle needed — fixed camera)
+        ctrl.followTarget = { x: newX, z: newZ };
+        ctrl.dotVisible = true;
+        ctrl.gpsFollow = gpsFollowRef.current;
+      }
+
+      if (ctrl.gpsFollow && ctrl.dotVisible) {
+        // FIXED-ANGLE CAMERA — same tilt always, just pans to follow dot
+        const pos = ctrl.followTarget || { x: 0, z: 0 };
+
+        // Fixed camera offset — larger for dorm building
+        const camOffsetX = -15;  // slightly left
+        const camOffsetZ = 35;   // behind
+        const camHeight = 40;    // above
+        const lookOffsetZ = -8;  // look ahead
+
+        const targetCamX = pos.x + camOffsetX;
+        const targetCamZ = pos.z + camOffsetZ;
+        const targetLookX = pos.x;
+        const targetLookZ = pos.z + lookOffsetZ;
+
+        // Smooth pan — keeps up with fast dot in large building
+        const lerp = 0.05;
+        camera.position.x += (targetCamX - camera.position.x) * lerp;
+        camera.position.y += (camHeight - camera.position.y) * lerp;
+        camera.position.z += (targetCamZ - camera.position.z) * lerp;
+
+        ctrl._lookX = (ctrl._lookX ?? targetLookX) + (targetLookX - (ctrl._lookX ?? targetLookX)) * lerp;
+        ctrl._lookZ = (ctrl._lookZ ?? targetLookZ) + (targetLookZ - (ctrl._lookZ ?? targetLookZ)) * lerp;
+        camera.lookAt(ctrl._lookX, 0, ctrl._lookZ);
+      } else {
+        // FREE LOOK MODE — original orbit controls
+        ctrl.rotY += (ctrl.targetRotY - ctrl.rotY) * 0.08;
+        ctrl.rotX += (ctrl.targetRotX - ctrl.rotX) * 0.08;
+        ctrl.distance += (ctrl.targetDistance - ctrl.distance) * 0.08;
+        ctrl.panX += (ctrl.targetPanX - ctrl.panX) * 0.08;
+        ctrl.panZ += (ctrl.targetPanZ - ctrl.panZ) * 0.08;
+
+        const cx = ctrl.panX + ctrl.distance * Math.sin(ctrl.rotY) * Math.cos(ctrl.rotX);
+        const cy = ctrl.distance * Math.sin(ctrl.rotX);
+        const cz = ctrl.panZ + ctrl.distance * Math.cos(ctrl.rotY) * Math.cos(ctrl.rotX);
+
+        camera.position.set(cx, cy, cz);
+        camera.lookAt(ctrl.panX, 0, ctrl.panZ);
+      }
 
       renderer.render(scene, camera);
     };
@@ -702,78 +803,46 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     return null;
   }, []);
 
-  // Smooth RSSI using exponential moving average
+  // RSSI smoothing — responsive for large building with spread-out beacons
   const smoothRSSI = (beaconId, rawRSSI) => {
-    const alpha = 0.3; // smoothing factor (0-1, lower = smoother)
     const prev = beaconSmoothed.current[beaconId];
     if (prev === undefined) {
       beaconSmoothed.current[beaconId] = rawRSSI;
-    } else {
-      beaconSmoothed.current[beaconId] = alpha * rawRSSI + (1 - alpha) * prev;
+      return rawRSSI;
     }
+
+    // Fast when close to beacon or big change, moderate otherwise
+    const diff = Math.abs(rawRSSI - prev);
+    const isClose = rawRSSI > -55;
+    const alpha = (isClose || diff > 12) ? 0.4 : 0.25;
+
+    beaconSmoothed.current[beaconId] = alpha * rawRSSI + (1 - alpha) * prev;
     return beaconSmoothed.current[beaconId];
   };
 
-  // L-shaped hallway path segments between adjacent beacons (7 beacons, 6 segments)
+  // Dorm L-shaped hallway — 7 beacons, 6 segments
   // Order: B1(V_30) → B5(V_16) → B2(V_00) → B3(H_ELEV) → B6(H_35) → B7(H_45) → B4(H_FAR)
   const BEACON_SEGMENTS = [
-    { // Segment 0: BEACON_1 → BEACON_5 (study room to mid vertical)
-      from: 'BEACON_1', to: 'BEACON_5',
-      waypoints: [
-        { x: 0, y: 30 },    // V_30
-        { x: 0, y: 26.25 }, // V_S1
-        { x: 0, y: 20 },    // V_20
-        { x: 0, y: 16 },    // V_16
-      ],
-    },
-    { // Segment 1: BEACON_5 → BEACON_2 (mid vertical to junction)
-      from: 'BEACON_5', to: 'BEACON_2',
-      waypoints: [
-        { x: 0, y: 16 },    // V_16
-        { x: 0, y: 12 },    // V_12
-        { x: 0, y: 8 },     // V_08
-        { x: 0, y: 4 },     // V_04
-        { x: 0, y: 0 },     // V_00
-      ],
-    },
-    { // Segment 2: BEACON_2 → BEACON_3 (junction to elevator)
-      from: 'BEACON_2', to: 'BEACON_3',
-      waypoints: [
-        { x: 0, y: 0 },     // V_00
-        { x: 5, y: 0 },     // H_05
-        { x: 10, y: 0 },    // H_10
-        { x: 15, y: 0 },    // H_15
-        { x: 21, y: 0 },    // H_ELEV
-      ],
-    },
-    { // Segment 3: BEACON_3 → BEACON_6 (elevator to mid horizontal)
-      from: 'BEACON_3', to: 'BEACON_6',
-      waypoints: [
-        { x: 21, y: 0 },    // H_ELEV
-        { x: 25, y: 0 },    // H_25
-        { x: 30, y: 0 },    // H_30
-        { x: 35, y: 0 },    // H_35
-      ],
-    },
-    { // Segment 4: BEACON_6 → BEACON_7 (mid horizontal to near stairs 2)
-      from: 'BEACON_6', to: 'BEACON_7',
-      waypoints: [
-        { x: 35, y: 0 },    // H_35
-        { x: 40, y: 0 },    // H_40
-        { x: 45, y: 0 },    // H_45
-      ],
-    },
-    { // Segment 5: BEACON_7 → BEACON_4 (near stairs 2 to far end)
-      from: 'BEACON_7', to: 'BEACON_4',
-      waypoints: [
-        { x: 45, y: 0 },    // H_45
-        { x: 51.5, y: 0 },  // H_S2
-        { x: 57.25, y: 0 }, // H_FAR
-      ],
-    },
+    { from: 'BEACON_1', to: 'BEACON_5', waypoints: [  // Study Room → Mid Vertical
+      { x: 0, y: 30 }, { x: 0, y: 26.25 }, { x: 0, y: 20 }, { x: 0, y: 16 },
+    ]},
+    { from: 'BEACON_5', to: 'BEACON_2', waypoints: [  // Mid Vertical → Junction
+      { x: 0, y: 16 }, { x: 0, y: 12 }, { x: 0, y: 8 }, { x: 0, y: 4 }, { x: 0, y: 0 },
+    ]},
+    { from: 'BEACON_2', to: 'BEACON_3', waypoints: [  // Junction → Elevator
+      { x: 0, y: 0 }, { x: 5, y: 0 }, { x: 10, y: 0 }, { x: 15, y: 0 }, { x: 21, y: 0 },
+    ]},
+    { from: 'BEACON_3', to: 'BEACON_6', waypoints: [  // Elevator → Mid Horizontal
+      { x: 21, y: 0 }, { x: 25, y: 0 }, { x: 30, y: 0 }, { x: 35, y: 0 },
+    ]},
+    { from: 'BEACON_6', to: 'BEACON_7', waypoints: [  // Mid Horizontal → Near Stairs 2
+      { x: 35, y: 0 }, { x: 40, y: 0 }, { x: 45, y: 0 },
+    ]},
+    { from: 'BEACON_7', to: 'BEACON_4', waypoints: [  // Near Stairs 2 → Far End
+      { x: 45, y: 0 }, { x: 51.5, y: 0 }, { x: 57.25, y: 0 },
+    ]},
   ];
 
-  // Ordered beacon IDs along the path
   const BEACON_ORDER = ['BEACON_1', 'BEACON_5', 'BEACON_2', 'BEACON_3', 'BEACON_6', 'BEACON_7', 'BEACON_4'];
 
   // Interpolate position along a segment's waypoints
@@ -792,15 +861,10 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     };
   };
 
-  // Move blue dot directly to x,y position
-  const moveBlueDot = (x, y) => {
+  // Create blue dot (only called once)
+  const createBlueDot = (x, y) => {
     const scene = sceneRef.current;
-    if (!scene) return;
-    if (blueDotRef.current) {
-      blueDotRef.current.position.set(x, 0, -y);
-      blueDotRef.current.visible = true;
-      return;
-    }
+    if (!scene || blueDotRef.current) return;
     const group = new THREE.Group();
     const dotGeo = new THREE.SphereGeometry(0.5, 16, 12);
     const dotMat = new THREE.MeshStandardMaterial({
@@ -822,8 +886,11 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     light.position.y = 1;
     group.add(light);
     group.position.set(x, 0, -y);
+    group.visible = true;
     scene.add(group);
     blueDotRef.current = group;
+    dotInitialized.current = true;
+    prevPos.current = { x, y };
   };
 
   // Determine position from RSSI of up to 4 beacons and slide dot along L-path
@@ -868,14 +935,13 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       const b1 = active[0];
       const b2 = active[1];
 
-      // Check if they are adjacent on the path
-      const idx1 = Math.min(b1.orderIdx, b2.orderIdx);
-      const idx2 = Math.max(b1.orderIdx, b2.orderIdx);
-      const segIdx = idx2 - idx1 === 1 ? idx1 : -1;
+      // Find a segment connecting these two beacons
+      const seg = BEACON_SEGMENTS.find(s =>
+        (s.from === b1.id && s.to === b2.id) || (s.from === b2.id && s.to === b1.id)
+      );
 
-      if (segIdx >= 0 && segIdx < BEACON_SEGMENTS.length) {
-        // Adjacent beacons — interpolate along segment
-        const seg = BEACON_SEGMENTS[segIdx];
+      if (seg) {
+        // Connected beacons — interpolate along segment
         const fromBeacon = seg.from === b1.id ? b1 : b2;
         const toBeacon = seg.to === b1.id ? b1 : b2;
 
@@ -908,21 +974,24 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     }
 
     if (pos) {
+      targetDotPos.current = pos;
       interpolatedPos.current = pos;
-      moveBlueDot(pos.x, pos.y);
+      // Don't move dot here — animation loop handles smooth movement
+      // Just ensure dot exists
+      if (!blueDotRef.current) createBlueDot(pos.x, pos.y);
     }
 
     // Announce room change (with 5 second cooldown to prevent spam)
     if (nearestNodeId && nearestNodeId !== currentBeaconRef.current) {
       currentBeaconRef.current = nearestNodeId;
       setCurrentBeaconNode(nearestNodeId);
-      setSelectedStart(nearestNodeId);
+      // Only set start if no active route
+      if (!currentPath) {
+        setSelectedStart(nearestNodeId);
+      }
       const shortLabel = nearestLabel?.split('—')[1]?.trim() || nearestLabel || nearestNodeId;
       const now = Date.now();
-      if (now - lastSpeakTime.current > 5000) {
-        speak('Near ' + shortLabel);
-        lastSpeakTime.current = now;
-      }
+      // Voice removed — blue dot moving is the feedback
       addLog('MOVED to ' + shortLabel);
     }
   }, [addLog]);
@@ -1229,17 +1298,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     }
   }, []);
 
-  // ============================================================
-  // CAMERA FOLLOW when beacon position changes
-  // Blue dot movement is handled by moveBlueDot() in updateBeaconPosition
-  // ============================================================
-  useEffect(() => {
-    if (!currentBeaconNode || !followMode || !cameraRef.current) return;
-    const pos = interpolatedPos.current;
-    const cam = cameraRef.current;
-    cam.position.set(pos.x, 35, -pos.y + 25);
-    cam.lookAt(pos.x, 0, -pos.y);
-  }, [currentBeaconNode, followMode]);
+  // GPS follow is handled in the animation loop via controlsRef.current.gpsFollow
 
   // ============================================================
   // UPDATE NODES
@@ -1491,6 +1550,46 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
   }, [blockedEdges]);
 
   // ============================================================
+  // FIREBASE FIRE DETECTION — listens for camera alerts
+  // ============================================================
+  useEffect(() => {
+    if (!db) return;
+    try {
+      const alertRef = doc(db, 'fire_alerts', 'active');
+      const unsubscribe = onSnapshot(alertRef, (snapshot) => {
+        if (!snapshot.exists()) return;
+        const data = snapshot.data();
+        if (data.active && data.zone && !emergencyMode) {
+          // Fire detected by camera! Block the fire zone and auto-evacuate
+          const zone = FIRE_ZONES?.[data.zone];
+          const fireBlocked = zone?.blockedEdges || [];
+          setBlockedEdges(fireBlocked);
+          setEmergencyMode(true);
+          if (selectedStart) {
+            const result = findNearestExit(selectedStart, NODES, EDGES, wheelchairMode, fireBlocked);
+            if (result) {
+              setCurrentPath(result.path);
+              const target = NODES.find(n => n.id === result.targetId);
+              setPathInfo({ distance: result.distance.toFixed(1), destination: target?.label || result.targetId });
+              const dirs = generateVoiceDirections(result.path, NODES);
+              setDirections(dirs);
+              setCurrentStep(0);
+              if (voiceEnabled) speak('Fire detected near ' + (zone?.label || data.zone) + '. Follow the blue path to safety.');
+            }
+          }
+        }
+        if (data.active === false && emergencyMode) {
+          // Fire cleared
+          setEmergencyMode(false);
+        }
+      });
+      return () => unsubscribe();
+    } catch (e) {
+      // Firebase not available
+    }
+  }, [emergencyMode, selectedStart, voiceEnabled, wheelchairMode, blockedEdges]);
+
+  // ============================================================
   // MOUSE / TOUCH CONTROLS
   // ============================================================
   const handleMouseDown = (e) => {
@@ -1506,7 +1605,10 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
 
     const dx = e.clientX - ctrl.startX;
     const dy = e.clientY - ctrl.startY;
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) ctrl.moved = true;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      ctrl.moved = true;
+      if (gpsFollow) setGpsFollow(false);
+    }
 
     ctrl.targetRotY -= dx * 0.005;
     ctrl.targetRotX = Math.max(0.1, Math.min(Math.PI / 2.2, ctrl.targetRotX + dy * 0.005));
@@ -1548,7 +1650,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       if (!selectedStart) {
         setSelectedStart(nodeId);
         if (voiceEnabled) speak('Starting point set.');
-      } else if (!selectedEnd && !emergencyMode) {
+      } else if (!selectedEnd) {
         if (nodeId !== selectedStart) {
           setSelectedEnd(nodeId);
         }
@@ -1585,7 +1687,10 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       const ctrl = controlsRef.current;
       const dx = t.clientX - ctrl.startX;
       const dy = t.clientY - ctrl.startY;
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) ctrl.moved = true;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        ctrl.moved = true;
+        if (gpsFollow) setGpsFollow(false);
+      }
       ctrl.targetRotY -= dx * 0.005;
       ctrl.targetRotX = Math.max(0.1, Math.min(Math.PI / 2.2, ctrl.targetRotX + dy * 0.005));
       ctrl.startX = t.clientX;
@@ -1618,17 +1723,12 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
     }
   };
 
+  // Fire detection will be handled by Pi camera in the future
+  // For now, fire can only be triggered manually via clearAll reset
+
   // ============================================================
   // ACTIONS
   // ============================================================
-  const simulateFire = () => {
-    // Pick a random fire zone from building data
-    const zoneKeys = FIRE_ZONES ? Object.keys(FIRE_ZONES) : [];
-    if (zoneKeys.length === 0) return;
-    const zone = FIRE_ZONES[zoneKeys[Math.floor(Math.random() * zoneKeys.length)]];
-    setBlockedEdges(zone.blockedEdges || []);
-    setEmergencyMode(true);
-  };
 
   const clearAll = () => {
     setBlockedEdges([]);
@@ -1657,144 +1757,116 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
 
   return (
     <div className="map-wrapper">
-      {/* TOOLBAR */}
+      {/* CLEAN NAVIGATION BAR */}
       {mode === 'navigate' && (
-        <div className="map-toolbar">
-          <div className="toolbar-left">
-            {wheelchairMode && <span className="mode-badge wheelchair">♿ Wheelchair</span>}
-            {hearingImpaired && <span className="mode-badge hearing">📳 Vibration Mode Active</span>}
-            <button className={`toolbar-btn ${showNodes ? 'active' : ''}`} onClick={() => setShowNodes(!showNodes)}>
-              📍 Nodes
+        <div style={{
+          position:'absolute', top:0, left:0, right:0, zIndex:100,
+          background: 'linear-gradient(135deg, #1a73e8, #4fc3f7)',
+          padding: '12px 16px', display:'flex', alignItems:'center', justifyContent:'space-between',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.3)',
+        }}>
+          <div style={{flex:1}}>
+            {directions.length > 0 && currentDir ? (
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <span style={{fontSize:'1.6rem'}}>{dirIcon}</span>
+                <div>
+                  <div style={{color:'#fff',fontWeight:'bold',fontSize:'0.95rem'}}>{currentDir.text}</div>
+                  {pathInfo && <div style={{color:'rgba(255,255,255,0.7)',fontSize:'0.7rem'}}>→ {pathInfo.destination} • {pathInfo.distance}m</div>}
+                </div>
+              </div>
+            ) : (
+              <div style={{color:'rgba(255,255,255,0.8)',fontSize:'0.85rem'}}>
+                {bleScanning
+                  ? (currentBeaconNode ? 'Tap a destination' : 'Scanning for beacons...')
+                  : 'Tap a node to start'}
+              </div>
+            )}
+          </div>
+          <div style={{display:'flex',gap:6}}>
+            {!bleScanning && (
+              <button onClick={startBLEScan} style={{background:'rgba(255,255,255,0.2)',color:'#fff',border:'none',borderRadius:20,padding:'6px 12px',fontSize:'0.75rem'}}>
+                📡 Scan
+              </button>
+            )}
+            {bleScanning && (
+              <button onClick={stopBLEScan} style={{background:'rgba(255,255,255,0.3)',color:'#fff',border:'none',borderRadius:20,padding:'6px 12px',fontSize:'0.75rem'}}>
+                ■ Stop
+              </button>
+            )}
+            <button onClick={() => {
+              if (!selectedStart) return;
+              const result = findNearestExit(selectedStart, NODES, EDGES, wheelchairMode, blockedEdges);
+              if (result) {
+                setCurrentPath(result.path);
+                const target = NODES.find(n => n.id === result.targetId);
+                setPathInfo({ distance: result.distance.toFixed(1), destination: target?.label || result.targetId });
+                const dirs = generateVoiceDirections(result.path, NODES);
+                setDirections(dirs);
+                setCurrentStep(0);
+                if (voiceEnabled) speak('Evacuating. Follow the blue path.');
+              }
+            }} style={{background:'rgba(255,80,80,0.85)',color:'#fff',border:'none',borderRadius:20,padding:'6px 12px',fontSize:'0.75rem'}}>
+              🚨 Evacuate
             </button>
-            <button
-              className={`toolbar-btn ${voiceEnabled ? 'active' : ''}`}
-              onClick={() => setVoiceEnabled(!voiceEnabled)}
-            >
-              {voiceEnabled ? '🔊' : '🔇'} Voice
+            <button onClick={clearAll} style={{background:'rgba(255,255,255,0.15)',color:'#fff',border:'none',borderRadius:20,padding:'6px 12px',fontSize:'0.75rem'}}>
+              ↻
             </button>
-            <button
-              className={`toolbar-btn ${vibrationEnabled ? 'active' : ''}`}
-              onClick={() => setVibrationEnabled(!vibrationEnabled)}
-            >
-              {vibrationEnabled ? '📳' : '📴'} Vibration
-            </button>
-            <button
-              className="toolbar-btn guide-btn"
-              onClick={() => setShowVibGuide(true)}
-              title="Vibration Guide"
-            >
+          </div>
+        </div>
+      )}
+
+      {/* TOOLBAR — all controls visible */}
+      {mode === 'navigate' && (
+        <div style={{
+          position:'absolute', top:52, left:0, right:0, zIndex:99,
+          display:'flex', gap:6, padding:'6px 12px', flexWrap:'wrap',
+          background:'rgba(10,12,18,0.85)',
+        }}>
+          {wheelchairMode && <span style={{background:'#1a73e8',color:'#fff',borderRadius:12,padding:'4px 10px',fontSize:'0.7rem'}}>♿ Wheelchair</span>}
+          <button onClick={() => setShowNodes(!showNodes)} style={{
+            background: showNodes ? '#1a73e8' : '#444',color:'#fff',border:'none',borderRadius:12,padding:'4px 10px',fontSize:'0.7rem',
+          }}>
+            📍 Nodes
+          </button>
+          <button onClick={() => setVoiceEnabled(!voiceEnabled)} style={{
+            background: voiceEnabled ? '#1a73e8' : '#444',color:'#fff',border:'none',borderRadius:12,padding:'4px 10px',fontSize:'0.7rem',
+          }}>
+            {voiceEnabled ? '🔊' : '🔇'} Voice
+          </button>
+          <button onClick={() => setVibrationEnabled(!vibrationEnabled)} style={{
+            background: vibrationEnabled ? '#1a73e8' : '#444',color:'#fff',border:'none',borderRadius:12,padding:'4px 10px',fontSize:'0.7rem',
+          }}>
+            {vibrationEnabled ? '📳' : '📴'} Vibration
+          </button>
+          {hearingImpaired && (
+            <button onClick={() => setShowVibGuide(true)} style={{
+              background:'#444',color:'#fff',border:'none',borderRadius:12,padding:'4px 10px',fontSize:'0.7rem',
+            }}>
               ❓ Guide
             </button>
-          </div>
-          <div className="toolbar-right">
-            <button
-              className={`toolbar-btn ${bleScanning ? 'active' : ''}`}
-              onClick={() => bleScanning ? stopBLEScan() : startBLEScan()}
-            >
-              📡 {bleScanning ? 'Stop Scan' : 'Scan'}
-            </button>
-            <button
-              className={`toolbar-btn ${followMode ? 'active' : ''}`}
-              onClick={() => setFollowMode(!followMode)}
-            >
-              🎯 {followMode ? 'Following' : 'Follow'}
-            </button>
-            <button className={`toolbar-btn fire ${emergencyMode ? 'active' : ''}`} onClick={simulateFire}>
-              🔥 Fire
-            </button>
-            <button className="toolbar-btn" onClick={clearAll}>↻ Clear</button>
-          </div>
-        </div>
-      )}
-
-      {mode === 'view' && (
-        <div className="map-toolbar">
-          <span className="mode-badge view">🏢 Building Overview — Ground Floor</span>
-        </div>
-      )}
-
-      {/* EMERGENCY */}
-      {emergencyMode && (
-        <div className="emergency-banner">🚨 EMERGENCY — FIRE DETECTED — REROUTING 🚨</div>
-      )}
-
-      {/* BEACON STATUS + DEBUG PANEL */}
-      {bleScanning && (
-        <div className="beacon-status">
-          📡 {currentBeaconNode
-            ? `Near: ${BEACONS.find(b => b.nodeId === currentBeaconNode)?.label || currentBeaconNode}`
-            : `Scanning... (${bleDeviceCount} ads received)`}
-          {bleDebug && <div style={{fontSize: '0.65rem', opacity: 0.7, marginTop: 2}}>{bleDebug}</div>}
-          <button
-            onClick={() => setShowBleDebug(!showBleDebug)}
-            style={{position:'absolute',right:8,top:8,background:'#333',color:'#fff',border:'none',borderRadius:4,padding:'2px 8px',fontSize:'0.6rem'}}
-          >
-            {showBleDebug ? 'Hide Log' : 'Show Log'}
-          </button>
-        </div>
-      )}
-      {!bleScanning && bleDebug && (
-        <div className="beacon-status" style={{background: '#3a1a1a'}}>
-          ⚠️ {bleDebug}
-        </div>
-      )}
-
-      {/* BLE DEBUG LOG */}
-      {showBleDebug && bleLog.length > 0 && (
-        <div style={{
-          position:'fixed', bottom:0, left:0, right:0,
-          maxHeight:'40vh', overflow:'auto',
-          background:'rgba(0,0,0,0.92)', color:'#0f0',
-          fontFamily:'monospace', fontSize:'0.55rem', lineHeight:1.3,
-          padding:'8px', zIndex:9999,
-          borderTop:'2px solid #0f0',
-        }}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
-            <span style={{color:'#ff0',fontWeight:'bold'}}>BLE DEBUG LOG ({bleLog.length} entries, {bleDeviceCount} ads)</span>
-            <button onClick={() => setBleLog([])} style={{background:'#600',color:'#fff',border:'none',borderRadius:3,padding:'1px 6px',fontSize:'0.55rem'}}>Clear</button>
-          </div>
-          {bleLog.map((entry, i) => (
-            <div key={i} style={{borderBottom:'1px solid #222',padding:'1px 0'}}>
-              <span style={{color:'#666'}}>{new Date(entry.t).toLocaleTimeString()}:</span> {entry.msg}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* DIRECTION BAR */}
-      {mode === 'navigate' && directions.length > 0 && (
-        <div className="direction-bar">
-          <span className="direction-icon">{dirIcon}</span>
-          <span className="direction-text">{currentDir?.text || ''}</span>
-          <span className="direction-step">Step {currentStep + 1}/{directions.length}</span>
-        </div>
-      )}
-
-      {/* PATH INFO */}
-      {mode === 'navigate' && pathInfo && (
-        <div className={`path-info ${pathInfo.error ? 'error' : ''}`}>
-          {pathInfo.error ? (
-            <span>❌ {pathInfo.error}</span>
-          ) : (
-            <span>
-              {pathInfo.isRefuge ? '♿ → Refuge: ' : '📍 → '}
-              <strong>{pathInfo.destination}</strong> — {pathInfo.distance}m
-              {pathInfo.isRefuge && ' — Help is on the way!'}
-            </span>
           )}
         </div>
       )}
 
-      {/* INSTRUCTIONS */}
-      {mode === 'navigate' && !selectedStart && !emergencyMode && (
-        <div className="map-instructions">
-          {bleScanning
-            ? (currentBeaconNode ? <>Position set from beacon. Tap a <strong>destination</strong>, or press 🔥</> : 'Walk near a beacon, or tap a node manually')
-            : <>Tap a node to set your <strong>starting point</strong></>}
+      {mode === 'view' && (
+        <div style={{
+          position:'absolute', top:0, left:0, right:0, zIndex:100,
+          background: 'linear-gradient(135deg, #2c3e50, #34495e)',
+          padding: '12px 16px', textAlign:'center', color:'#fff', fontSize:'0.9rem',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.3)',
+        }}>
+          🏢 Building Overview
         </div>
       )}
-      {mode === 'navigate' && selectedStart && !selectedEnd && !emergencyMode && (
-        <div className="map-instructions">Now tap a <strong>destination</strong>, or press 🔥 for emergency</div>
+
+
+
+
+      {/* Error display */}
+      {mode === 'navigate' && pathInfo?.error && (
+        <div style={{position:'absolute',top:56,left:16,right:16,zIndex:90,background:'rgba(200,30,30,0.9)',color:'#fff',padding:'8px 12px',borderRadius:8,fontSize:'0.8rem',textAlign:'center'}}>
+          {pathInfo.error}
+        </div>
       )}
 
       {/* 3D CANVAS */}
@@ -1810,69 +1882,79 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
         onTouchEnd={handleTouchEnd}
       />
 
-      {/* STEP CONTROLS (simulate walking) */}
-      {mode === 'navigate' && directions.length > 1 && (
-        <div className="step-controls">
-          <button
-            className="step-btn"
-            onClick={handlePrevStep}
-            disabled={currentStep <= 0}
-          >
-            ◀ Prev
-          </button>
-          <button
-            className="step-btn step-btn-primary"
-            onClick={handleNextStep}
-            disabled={currentStep >= directions.length - 1}
-          >
-            Next Step ▶
-          </button>
-          <button
-            className="step-btn"
-            onClick={() => {
-              if (voiceEnabled && currentDir) speak(currentDir.text);
-              if (vibrationEnabled && currentDir) vibrate(currentDir.type);
-            }}
-          >
-            🔊 Repeat
+      {/* RIGHT SIDE CONTROLS */}
+      {mode === 'navigate' && (
+        <div style={{position:'absolute',bottom:60,right:12,zIndex:90,display:'flex',flexDirection:'column',gap:8}}>
+          {bleScanning && (
+            <button onClick={() => setGpsFollow(!gpsFollow)} style={{
+              background: gpsFollow ? '#1a73e8' : 'rgba(40,40,40,0.85)',
+              color:'#fff',border:'none',borderRadius:'50%',
+              width:50,height:50,fontSize:'1.3rem',boxShadow:'0 2px 10px rgba(0,0,0,0.5)',
+              display:'flex',alignItems:'center',justifyContent:'center',
+            }}>
+              🧭
+            </button>
+          )}
+          <button onClick={() => setShowSettings(!showSettings)} style={{
+            background:'rgba(40,40,40,0.85)',color:'#fff',border:'none',borderRadius:'50%',
+            width:42,height:42,fontSize:'1.1rem',boxShadow:'0 2px 8px rgba(0,0,0,0.4)',
+          }}>
+            ⚙️
           </button>
         </div>
       )}
 
-      {/* FLOOR SELECTOR */}
-      <div className="floor-selector">
-        <button className="floor-btn" disabled>2</button>
-        <button className="floor-btn" disabled>1</button>
-        <button className="floor-btn active">G</button>
-      </div>
-
-      {/* LEGEND */}
-      <div className="map-legend">
-        <span className="legend-item"><span className="dot" style={{ background: '#E02020' }}></span>Exit</span>
-        <span className="legend-item"><span className="dot" style={{ background: '#E8A800' }}></span>Elevator</span>
-        <span className="legend-item"><span className="dot" style={{ background: '#D06000' }}></span>Stairs</span>
-        <span className="legend-item"><span className="dot" style={{ background: '#20A840' }}></span>Refuge</span>
-        <span className="legend-item"><span className="dot" style={{ background: '#3090D0' }}></span>Ramp</span>
-        {mode === 'navigate' && (
-          <>
-            <span className="legend-item"><span className="dot" style={{ background: '#2288FF' }}></span>You</span>
-            <span className="legend-item"><span className="dot" style={{ background: '#3388FF' }}></span>Path</span>
-          </>
-        )}
-      </div>
-
-      {/* VIBRATION GUIDE (compact bar for hearing impaired) */}
-      {hearingImpaired && vibrationEnabled && mode === 'navigate' && (
-        <div className="vibration-guide" onClick={() => setShowVibGuide(true)}>
-          <span className="vib-title">📳 Vibration Active — Tap for Guide</span>
-          <span className="vib-item">⬆️ 1x</span>
-          <span className="vib-item">⬅️ 2x</span>
-          <span className="vib-item">➡️ 3x</span>
-          <span className="vib-item">⚡ 5x</span>
-          <span className="vib-item">🏁 long</span>
-          <span className="vib-item">🔥 rapid</span>
+      {/* SETTINGS PANEL */}
+      {showSettings && mode === 'navigate' && (
+        <div style={{
+          position:'absolute',bottom:120,right:12,zIndex:95,
+          background:'rgba(20,25,35,0.95)',borderRadius:12,padding:'12px 14px',
+          boxShadow:'0 4px 20px rgba(0,0,0,0.5)',minWidth:180,
+        }}>
+          <div style={{color:'#aaa',fontSize:'0.65rem',marginBottom:8,textTransform:'uppercase',letterSpacing:1}}>Settings</div>
+          {[
+            { label: 'Voice', icon: voiceEnabled ? '🔊' : '🔇', active: voiceEnabled, fn: () => setVoiceEnabled(!voiceEnabled) },
+            { label: 'Vibration', icon: vibrationEnabled ? '📳' : '📴', active: vibrationEnabled, fn: () => setVibrationEnabled(!vibrationEnabled) },
+            { label: 'Show Nodes', icon: '📍', active: showNodes, fn: () => setShowNodes(!showNodes) },
+            { label: 'Wheelchair', icon: '♿', active: wheelchairMode, fn: null },
+          ].map((item, i) => (
+            <div key={i} onClick={item.fn} style={{
+              display:'flex',alignItems:'center',justifyContent:'space-between',
+              padding:'8px 4px',borderBottom: i < 3 ? '1px solid rgba(255,255,255,0.08)' : 'none',
+              cursor: item.fn ? 'pointer' : 'default', opacity: item.fn ? 1 : 0.5,
+            }}>
+              <span style={{color:'#fff',fontSize:'0.82rem'}}>{item.icon} {item.label}</span>
+              <span style={{
+                width:36,height:20,borderRadius:10,
+                background: item.active ? '#1a73e8' : '#444',
+                display:'flex',alignItems:'center',padding:'0 2px',
+                justifyContent: item.active ? 'flex-end' : 'flex-start',
+                transition:'all 0.2s',
+              }}>
+                <span style={{width:16,height:16,borderRadius:'50%',background:'#fff'}}/>
+              </span>
+            </div>
+          ))}
+          {hearingImpaired && (
+            <button onClick={() => { setShowVibGuide(true); setShowSettings(false); }} style={{
+              width:'100%',marginTop:8,background:'#333',color:'#fff',border:'none',
+              borderRadius:8,padding:'8px',fontSize:'0.78rem',
+            }}>
+              📳 Vibration Guide
+            </button>
+          )}
         </div>
       )}
+
+      {/* COMPACT LEGEND */}
+      <div style={{
+        position:'absolute',bottom:8,left:8,zIndex:80,
+        display:'flex',gap:8,background:'rgba(0,0,0,0.6)',padding:'4px 10px',borderRadius:12,fontSize:'0.6rem',color:'#fff',
+      }}>
+        <span>🔴 Exit</span><span>🟡 Elevator</span><span>🟠 Stairs</span><span>🟢 Refuge</span><span>🔵 You</span>
+      </div>
+
+
 
       {/* VIBRATION GUIDE MODAL */}
       {showVibGuide && (
