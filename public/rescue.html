@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Rescue Map — Smart Navigation Filter</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0f1117; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
+
+    #header {
+      background: #cc2020;
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    #header h1 { font-size: 1.1rem; color: white; font-weight: 700; }
+    #header .pulse { width: 14px; height: 14px; border-radius: 50%; background: white; animation: pulse 1s infinite; flex-shrink: 0; }
+    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.3)} }
+
+    #info-bar {
+      background: #1a1d24;
+      padding: 12px 16px;
+      border-bottom: 1px solid #2a2d36;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    #info-bar .name { font-size: 1rem; font-weight: 700; color: white; }
+    #info-bar .location { font-size: 0.85rem; color: #f87171; }
+    #info-bar .time { font-size: 0.75rem; color: #6b7280; }
+
+    #map-container {
+      position: relative;
+      width: 100%;
+      overflow: hidden;
+      background: #0a0c12;
+    }
+
+    canvas { display: block; width: 100%; }
+
+    #legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 10px 16px;
+      background: #1a1d24;
+      border-top: 1px solid #2a2d36;
+      font-size: 0.75rem;
+    }
+    .legend-item { display: flex; align-items: center; gap: 5px; color: #8892a4; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+    #path-info {
+      padding: 12px 16px;
+      background: #152030;
+      border-top: 1px solid #2a3a4a;
+      font-size: 0.85rem;
+      color: #90b0d0;
+    }
+    #path-info strong { color: white; }
+
+    #loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 60vh;
+      gap: 16px;
+      color: #6b7280;
+    }
+    .spinner { width: 40px; height: 40px; border: 3px solid #2a2d36; border-top-color: #3b82f6; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #error {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 60vh;
+      gap: 16px;
+      color: #f87171;
+      padding: 20px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <p>Loading rescue map...</p>
+</div>
+
+<div id="error">
+  <div style="font-size:48px">⚠️</div>
+  <h2>Alert Not Found</h2>
+  <p id="error-msg">This rescue link may have expired or been cancelled.</p>
+</div>
+
+<div id="app" style="display:none">
+  <div id="header">
+    <div class="pulse"></div>
+    <h1>🆘 RESCUE ALERT — Active</h1>
+  </div>
+
+  <div id="info-bar">
+    <div class="name" id="user-name">Loading...</div>
+    <div class="location">📍 Last known location: <span id="user-location">—</span></div>
+    <div class="time">Alert sent: <span id="alert-time">—</span></div>
+  </div>
+
+  <div id="map-container">
+    <canvas id="map-canvas"></canvas>
+  </div>
+
+  <div id="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#f87171"></div> User Location</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#4ade80"></div> Nearest Exit</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#60a5fa"></div> Your Path</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#e8a800"></div> Elevator</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ff8c2e"></div> Stairs</div>
+  </div>
+
+  <div id="path-info">Loading path...</div>
+</div>
+
+<!-- Firebase SDK -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAzIs0vkL7_vCuk6pspGUBfm0hkGR7x9cs",
+  authDomain: "smart-nav-fire.firebaseapp.com",
+  projectId: "smart-nav-fire",
+  storageBucket: "smart-nav-fire.firebasestorage.app",
+  messagingSenderId: "738290033606",
+  appId: "1:738290033606:web:d8513697cfc95837ca88c7"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+// ============================================================
+// BUILDING DATA (inline - no imports needed)
+// ============================================================
+const HW = 1.25;
+const X_ELEV_W = 21, X_ELEV_E = 24.75;
+const X_STAIR2 = 50, X_FAR_EAST = 57.25;
+const Y_STAIR1 = 26.25, Y_VERT_TOP = 34;
+const ELEV_D = 5.75, S1_W = 2.5, S1_D = 3.5, S2_W = 3.0, S2_D = 2.5;
+
+const NODES = [
+  { id: "EXIT_STAIRS1", x: -(HW+S1_W+0.5), y: Y_STAIR1, type: "exit", label: "Exit — Stairs 1" },
+  { id: "EXIT_STAIRS2", x: X_STAIR2+S2_W/2, y: -(HW+S2_D+0.5), type: "exit", label: "Exit — Stairs 2" },
+  { id: "EXIT_ELEVATOR", x: (X_ELEV_W+X_ELEV_E)/2, y: HW+ELEV_D-0.5, type: "exit", label: "Exit — Elevator" },
+  { id: "ELEVATOR", x: (X_ELEV_W+X_ELEV_E)/2, y: HW+ELEV_D/2, type: "elevator", label: "Elevator" },
+  { id: "REFUGE_1", x: 0, y: -(HW+0.5), type: "refuge", label: "Refuge" },
+  { id: "V_00", x: 0, y: 0, type: "intersection" },
+  { id: "V_04", x: 0, y: 4, type: "intersection" },
+  { id: "V_08", x: 0, y: 8, type: "intersection" },
+  { id: "V_12", x: 0, y: 12, type: "intersection" },
+  { id: "V_16", x: 0, y: 16, type: "intersection" },
+  { id: "V_20", x: 0, y: 20, type: "intersection" },
+  { id: "V_24", x: 0, y: 24, type: "intersection" },
+  { id: "V_S1", x: 0, y: Y_STAIR1, type: "intersection", label: "Stairs 1 Junction" },
+  { id: "V_30", x: 0, y: 30, type: "intersection" },
+  { id: "V_34", x: 0, y: Y_VERT_TOP, type: "intersection" },
+  { id: "H_05", x: 5, y: 0, type: "intersection" },
+  { id: "H_10", x: 10, y: 0, type: "intersection" },
+  { id: "H_15", x: 15, y: 0, type: "intersection" },
+  { id: "H_ELEV", x: X_ELEV_W, y: 0, type: "intersection", label: "Elevator Junction" },
+  { id: "H_25", x: 25, y: 0, type: "intersection" },
+  { id: "H_30", x: 30, y: 0, type: "intersection" },
+  { id: "H_35", x: 35, y: 0, type: "intersection" },
+  { id: "H_40", x: 40, y: 0, type: "intersection" },
+  { id: "H_45", x: 45, y: 0, type: "intersection" },
+  { id: "H_S2", x: X_STAIR2+S2_W/2, y: 0, type: "intersection" },
+  { id: "H_FAR", x: X_FAR_EAST, y: 0, type: "intersection" },
+  { id: "ELEV_ENTRY", x: (X_ELEV_W+X_ELEV_E)/2, y: HW+0.5, type: "intersection" },
+  { id: "STAIRS_1", x: -(HW+S1_W), y: Y_STAIR1, type: "stairs" },
+  { id: "STAIRS_2", x: X_STAIR2+S2_W/2, y: -(HW+S2_D), type: "stairs" },
+];
+
+const EDGES = [
+  { from: "V_00", to: "V_04" }, { from: "V_04", to: "V_08" },
+  { from: "V_08", to: "V_12" }, { from: "V_12", to: "V_16" },
+  { from: "V_16", to: "V_20" }, { from: "V_20", to: "V_24" },
+  { from: "V_24", to: "V_S1" }, { from: "V_S1", to: "V_30" },
+  { from: "V_30", to: "V_34" },
+  { from: "V_00", to: "H_05" }, { from: "H_05", to: "H_10" },
+  { from: "H_10", to: "H_15" }, { from: "H_15", to: "H_ELEV" },
+  { from: "H_ELEV", to: "H_25" }, { from: "H_25", to: "H_30" },
+  { from: "H_30", to: "H_35" }, { from: "H_35", to: "H_40" },
+  { from: "H_40", to: "H_45" }, { from: "H_45", to: "H_S2" },
+  { from: "H_S2", to: "H_FAR" },
+  { from: "V_S1", to: "EXIT_STAIRS1" }, { from: "EXIT_STAIRS1", to: "STAIRS_1" },
+  { from: "H_S2", to: "EXIT_STAIRS2" }, { from: "EXIT_STAIRS2", to: "STAIRS_2" },
+  { from: "H_ELEV", to: "ELEV_ENTRY" }, { from: "ELEV_ENTRY", to: "EXIT_ELEVATOR" },
+  { from: "EXIT_ELEVATOR", to: "ELEVATOR" },
+  { from: "V_00", to: "REFUGE_1" },
+];
+
+// ============================================================
+// DIJKSTRA
+// ============================================================
+function dijkstra(startId, endId) {
+  const adj = {};
+  const nodeMap = {};
+  NODES.forEach(n => { adj[n.id] = []; nodeMap[n.id] = n; });
+  EDGES.forEach(e => {
+    const n1 = nodeMap[e.from], n2 = nodeMap[e.to];
+    if (!n1 || !n2) return;
+    const d = Math.sqrt((n1.x-n2.x)**2 + (n1.y-n2.y)**2);
+    adj[e.from].push({ node: e.to, dist: d });
+    adj[e.to].push({ node: e.from, dist: d });
+  });
+  const dist = {}, prev = {}, visited = new Set();
+  NODES.forEach(n => dist[n.id] = Infinity);
+  dist[startId] = 0;
+  while (true) {
+    let minNode = null, minDist = Infinity;
+    for (const id in dist) {
+      if (!visited.has(id) && dist[id] < minDist) { minDist = dist[id]; minNode = id; }
+    }
+    if (!minNode || minNode === endId) break;
+    visited.add(minNode);
+    for (const nb of (adj[minNode] || [])) {
+      if (visited.has(nb.node)) continue;
+      const nd = dist[minNode] + nb.dist;
+      if (nd < dist[nb.node]) { dist[nb.node] = nd; prev[nb.node] = minNode; }
+    }
+  }
+  if (dist[endId] === Infinity) return null;
+  const path = [];
+  let cur = endId;
+  while (cur) { path.unshift(cur); cur = prev[cur]; }
+  return { path, distance: dist[endId] };
+}
+
+function findNearestExit(startId) {
+  const exits = NODES.filter(n => n.type === "exit");
+  let best = null;
+  for (const exit of exits) {
+    const r = dijkstra(startId, exit.id);
+    if (r && (!best || r.distance < best.distance)) best = { ...r, exitId: exit.id };
+  }
+  return best;
+}
+
+// ============================================================
+// 2D MAP DRAWING
+// ============================================================
+function drawMap(userNodeId, pathFromExit) {
+  const canvas = document.getElementById('map-canvas');
+  const container = document.getElementById('map-container');
+  const W = container.clientWidth || window.innerWidth;
+  const H = W * 1.2;
+  canvas.width = W;
+  canvas.height = H;
+  container.style.height = H + 'px';
+
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+
+  // Calculate scale and offset to fit building
+  const padding = 40;
+  const bldW = X_FAR_EAST + HW * 2;
+  const bldH = Y_VERT_TOP + 10;
+  const scale = Math.min((W - padding*2) / bldW, (H - padding*2) / bldH);
+  const offX = padding + HW * scale;
+  const offY = H - padding - HW * scale;
+
+  function tx(x) { return offX + x * scale; }
+  function ty(y) { return offY - y * scale; }
+
+  // Draw corridors
+  ctx.fillStyle = '#1e2535';
+  // Vertical hall
+  ctx.fillRect(tx(-HW), ty(Y_VERT_TOP+2), HW*2*scale, (Y_VERT_TOP+2+HW)*scale);
+  // Horizontal hall
+  ctx.fillRect(tx(-HW), ty(HW), (X_FAR_EAST+HW*2)*scale, HW*2*scale);
+  // Elevator lobby
+  ctx.fillStyle = '#2a2a1a';
+  ctx.fillRect(tx(X_ELEV_W), ty(HW+ELEV_D), (X_ELEV_E-X_ELEV_W)*scale, ELEV_D*scale);
+  // Stairs1
+  ctx.fillStyle = '#2a1a0a';
+  ctx.fillRect(tx(-(HW+S1_W)), ty(Y_STAIR1+S1_D/2), S1_W*scale, S1_D*scale);
+  // Stairs2
+  ctx.fillRect(tx(X_STAIR2), ty(-HW), S2_W*scale, S2_D*scale);
+
+  // Draw walls
+  ctx.strokeStyle = '#4a5568';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  // Vertical hall outline
+  ctx.rect(tx(-HW), ty(Y_VERT_TOP+2), HW*2*scale, (Y_VERT_TOP+2+HW)*scale);
+  ctx.rect(tx(-HW), ty(HW), (X_FAR_EAST+HW*2)*scale, HW*2*scale);
+  ctx.stroke();
+
+  // Draw path
+  if (pathFromExit && pathFromExit.length > 1) {
+    const nodeMap = {};
+    NODES.forEach(n => nodeMap[n.id] = n);
+    ctx.strokeStyle = '#60a5fa';
+    ctx.lineWidth = 4;
+    ctx.setLineDash([8, 4]);
+    ctx.beginPath();
+    for (let i = 0; i < pathFromExit.length; i++) {
+      const n = nodeMap[pathFromExit[i]];
+      if (!n) continue;
+      if (i === 0) ctx.moveTo(tx(n.x), ty(n.y));
+      else ctx.lineTo(tx(n.x), ty(n.y));
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Draw all nodes
+  const nodeMap = {};
+  NODES.forEach(n => nodeMap[n.id] = n);
+
+  NODES.forEach(n => {
+    let color = '#506070', size = 5;
+    if (n.type === 'exit') { color = '#4ade80'; size = 8; }
+    else if (n.type === 'elevator') { color = '#e8a800'; size = 7; }
+    else if (n.type === 'stairs') { color = '#ff8c2e'; size = 7; }
+    else if (n.type === 'refuge') { color = '#40d465'; size = 6; }
+
+    ctx.beginPath();
+    ctx.arc(tx(n.x), ty(n.y), size, 0, Math.PI*2);
+    ctx.fillStyle = color;
+    ctx.fill();
+
+    if (n.label) {
+      ctx.fillStyle = '#a0aec0';
+      ctx.font = `${Math.max(9, scale*0.8)}px sans-serif`;
+      ctx.fillText(n.label, tx(n.x)+size+2, ty(n.y)+4);
+    }
+  });
+
+  // Draw exit node larger with label
+  if (pathFromExit && pathFromExit.length > 0) {
+    const exitNode = nodeMap[pathFromExit[0]];
+    if (exitNode) {
+      ctx.beginPath();
+      ctx.arc(tx(exitNode.x), ty(exitNode.y), 12, 0, Math.PI*2);
+      ctx.fillStyle = '#4ade80';
+      ctx.fill();
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.fillText('EXIT', tx(exitNode.x)-14, ty(exitNode.y)+4);
+    }
+  }
+
+  // Draw user location (pulsing red dot)
+  const userNode = nodeMap[userNodeId];
+  if (userNode) {
+    // Outer ring
+    ctx.beginPath();
+    ctx.arc(tx(userNode.x), ty(userNode.y), 18, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(248, 113, 113, 0.25)';
+    ctx.fill();
+    // Inner dot
+    ctx.beginPath();
+    ctx.arc(tx(userNode.x), ty(userNode.y), 10, 0, Math.PI*2);
+    ctx.fillStyle = '#f87171';
+    ctx.fill();
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Label
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.fillText('USER', tx(userNode.x)-14, ty(userNode.y)-14);
+  }
+}
+
+// ============================================================
+// MAIN
+// ============================================================
+async function main() {
+  const params = new URLSearchParams(window.location.search);
+  const alertId = params.get('alert');
+
+  if (!alertId) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('error').style.display = 'flex';
+    document.getElementById('error-msg').textContent = 'No alert ID in URL.';
+    return;
+  }
+
+  try {
+    const alertDoc = await getDoc(doc(db, 'rescue_alerts', alertId));
+    if (!alertDoc.exists()) {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('error').style.display = 'flex';
+      return;
+    }
+
+    const data = alertDoc.data();
+    const userLocation = data.location || 'V_00';
+    const userName = data.userName || 'Unknown User';
+    const timestamp = data.timestamp?.toDate?.()?.toLocaleString() || 'Unknown';
+
+    // Update info bar
+    document.getElementById('user-name').textContent = '👤 ' + userName;
+    document.getElementById('user-location').textContent = userLocation;
+    document.getElementById('alert-time').textContent = timestamp;
+
+    // Find path from nearest exit to user
+    const result = findNearestExit(userLocation);
+    const exitNode = result ? NODES.find(n => n.id === result.exitId) : null;
+
+    if (result) {
+      const dist = (result.distance * 4).toFixed(0); // convert to feet
+      document.getElementById('path-info').innerHTML =
+        `<strong>Nearest exit:</strong> ${exitNode?.label || result.exitId} &nbsp;|&nbsp; <strong>Distance:</strong> ~${dist} ft &nbsp;|&nbsp; <strong>Steps:</strong> ${result.path.length - 1}`;
+    } else {
+      document.getElementById('path-info').textContent = 'Could not calculate path.';
+    }
+
+    // Show app
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+
+    // Draw map
+    drawMap(userLocation, result?.path);
+
+    // Redraw on resize
+    window.addEventListener('resize', () => drawMap(userLocation, result?.path));
+
+  } catch (err) {
+    console.error(err);
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('error').style.display = 'flex';
+    document.getElementById('error-msg').textContent = 'Error loading alert: ' + err.message;
+  }
+}
+
+main();
+</script>
+</body>
+</html>

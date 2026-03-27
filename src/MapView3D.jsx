@@ -258,7 +258,7 @@ function generateVoiceDirections(path, nodes) {
 // ============================================================
 // 3D MAP VIEW
 // ============================================================
-export default function MapView3D({ profile, mode = 'navigate' }) {
+export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate }) {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const cameraRef = useRef(null);
@@ -988,6 +988,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
       // Only set start if no active route
       if (!currentPath) {
         setSelectedStart(nearestNodeId);
+      if (onLocationUpdate) onLocationUpdate(nearestNodeId);
       }
       const shortLabel = nearestLabel?.split('—')[1]?.trim() || nearestLabel || nearestNodeId;
       const now = Date.now();
@@ -1649,6 +1650,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
 
       if (!selectedStart) {
         setSelectedStart(nodeId);
+        if (onLocationUpdate) onLocationUpdate(nodeId);
         if (voiceEnabled) speak('Starting point set.');
       } else if (!selectedEnd) {
         if (nodeId !== selectedStart) {
@@ -1656,6 +1658,7 @@ export default function MapView3D({ profile, mode = 'navigate' }) {
         }
       } else {
         setSelectedStart(nodeId);
+        if (onLocationUpdate) onLocationUpdate(nodeId);
         setSelectedEnd(null);
         setCurrentPath(null);
         setPathInfo(null);
