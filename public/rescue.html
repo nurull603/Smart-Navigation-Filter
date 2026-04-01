@@ -15,7 +15,7 @@
     #info-bar .name { font-size: 1rem; font-weight: 700; color: white; }
     #info-bar .location { font-size: 0.85rem; color: #f87171; }
     #info-bar .time { font-size: 0.75rem; color: #6b7280; }
-    #map-container { position: relative; width: 100%; overflow: hidden; background: #0a0c12; }
+    #map-container { position: relative; width: 100%; overflow: hidden; background: #0a0c12; touch-action: none; }
     canvas { display: block; width: 100%; }
     #legend { display: flex; flex-wrap: wrap; gap: 12px; padding: 10px 16px; background: #1a1d24; border-top: 1px solid #2a2d36; font-size: 0.75rem; }
     .legend-item { display: flex; align-items: center; gap: 5px; color: #8892a4; }
@@ -283,164 +283,203 @@ function findNearestExit(startId) {
 // ============================================================
 // DRAW MAP
 // ============================================================
-function drawMap(userNodeId, pathToExit) {
-  const canvas=document.getElementById('map-canvas');
-  const container=document.getElementById('map-container');
-  const W=container.clientWidth||window.innerWidth;
-  const H=Math.round(W*3.0); // tall enough for the building
-  canvas.width=W; canvas.height=H; container.style.height=H+'px';
-  const ctx=canvas.getContext('2d');
-  ctx.fillStyle='#12151c'; ctx.fillRect(0,0,W,H);
+// view state — pan/zoom, same as MapView.jsx
+const view = { offsetX: 0, offsetY: 0, scale: 1 };
 
-  // EXACT same coordinate system as MapView.jsx:
+function drawMap(userNodeId, pathToExit) {
+  const canvas = document.getElementById('map-canvas');
+  const container = document.getElementById('map-container');
+
+  // Size canvas to fill container
+  canvas.width  = container.clientWidth  || window.innerWidth;
+  canvas.height = container.clientHeight || window.innerHeight - 220;
+
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = '#12151c';
+  ctx.fillRect(0, 0, W, H);
+
+  // EXACT worldToScreen from MapView.jsx:
   // x = cx + (wx * s) + offsetX
-  // y = cy + (-wy * s) + offsetY   ← Y is negated
-  const s = Math.min(W / 50, H / 125); // fit full building width+height
-  const cx = W/2 - 14.5*s;  // center x range (-6..35, center=14.5)
-  const cy = H/2 + 49*s;    // center y range (-6..104, center=49), negated Y
-  const ws = (wx,wy) => ({ x: cx + wx*s, y: cy + (-wy*s) });
+  // y = cy + (-wy * s) + offsetY
+  const s  = view.scale * 10;
+  const cx = W / 2;
+  const cy = H / 2;
+  function ws(wx, wy) {
+    return {
+      x: cx + wx * s + view.offsetX,
+      y: cy + (-wy * s) + view.offsetY,
+    };
+  }
 
   // Corridors
-  ctx.fillStyle='rgba(96,144,176,0.15)';
-  CORRIDORS.forEach(c=>{
-    const p=ws(c.x, c.y+c.h);
-    ctx.fillRect(p.x, p.y, c.w*s, c.h*s);
+  CORRIDORS.forEach(c => {
+    const p = ws(c.x, c.y + c.h);
+    ctx.globalAlpha = 0.15; ctx.fillStyle = '#6090B0';
+    ctx.fillRect(p.x, p.y, c.w * s, c.h * s);
+    ctx.globalAlpha = 1;
   });
 
-  // Rooms
-  ZONES.forEach(z=>{
-    const p=ws(z.x, z.y+z.h);
-    ctx.globalAlpha=0.45; ctx.fillStyle=z.color;
-    ctx.fillRect(p.x,p.y,z.w*s,z.h*s);
-    ctx.globalAlpha=0.6; ctx.strokeStyle='rgba(255,255,255,0.15)'; ctx.lineWidth=1;
-    ctx.strokeRect(p.x,p.y,z.w*s,z.h*s); ctx.globalAlpha=1;
-    if(s>3){
-      const cp=ws(z.x+z.w/2, z.y+z.h/2);
-      ctx.fillStyle='rgba(0,0,0,0.8)';
-      ctx.font=`bold ${Math.max(7,Math.min(11,s*1.1))}px sans-serif`;
-      ctx.textAlign='center'; ctx.textBaseline='middle';
-      const lines=z.name.split('\n');
-      lines.forEach((l,i)=>ctx.fillText(l,cp.x,cp.y+(i-(lines.length-1)/2)*s*1.4));
+  // Zones / rooms
+  ZONES.forEach(z => {
+    const p = ws(z.x, z.y + z.h);
+    ctx.globalAlpha = 0.4; ctx.fillStyle = z.color;
+    ctx.fillRect(p.x, p.y, z.w * s, z.h * s);
+    ctx.globalAlpha = 1;
+    if (s > 5) {
+      const cp = ws(z.x + z.w / 2, z.y + z.h / 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.font = `${Math.max(8, s * 0.11)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      z.name.split('\n').forEach((line, i, arr) =>
+        ctx.fillText(line, cp.x, cp.y + (i - (arr.length-1)/2) * s * 0.14));
     }
   });
 
   // Walls
-  ctx.strokeStyle='#c8ccd4'; ctx.lineWidth=Math.max(1.5,s*0.035); ctx.lineCap='round';
-  WALLS.forEach(w=>{
-    const p1=ws(w.x1,w.y1), p2=ws(w.x2,w.y2);
-    ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.stroke();
+  ctx.strokeStyle = '#c8ccd4'; ctx.lineWidth = Math.max(2, s * 0.035); ctx.lineCap = 'round';
+  WALLS.forEach(w => {
+    const p1 = ws(w.x1, w.y1), p2 = ws(w.x2, w.y2);
+    ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
   });
 
-  // Path (blue)
-  if(pathToExit&&pathToExit.length>1){
-    const nm={};NODES.forEach(n=>nm[n.id]=n);
-    // Glow
-    ctx.strokeStyle='rgba(50,130,255,0.3)'; ctx.lineWidth=Math.max(10,s*0.12);
-    ctx.lineCap='round'; ctx.lineJoin='round';
+  // Path
+  if (pathToExit && pathToExit.length > 1) {
+    const nm = {}; NODES.forEach(n => nm[n.id] = n);
+    // glow
+    ctx.strokeStyle = 'rgba(50,130,255,0.3)'; ctx.lineWidth = Math.max(10, s * 0.12);
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     ctx.beginPath();
-    pathToExit.forEach((id,i)=>{const n=nm[id];if(!n)return;const p=ws(n.x,n.y);i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y);});
+    pathToExit.forEach((id, i) => { const n = nm[id]; if (!n) return; const p = ws(n.x, n.y); i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y); });
     ctx.stroke();
-    // Main line
-    ctx.strokeStyle='#3388ff'; ctx.lineWidth=Math.max(3,s*0.055);
+    // solid
+    ctx.strokeStyle = '#3388FF'; ctx.lineWidth = Math.max(4, s * 0.055);
     ctx.beginPath();
-    pathToExit.forEach((id,i)=>{const n=nm[id];if(!n)return;const p=ws(n.x,n.y);i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y);});
+    pathToExit.forEach((id, i) => { const n = nm[id]; if (!n) return; const p = ws(n.x, n.y); i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y); });
     ctx.stroke();
   }
 
   // Nodes
-  const nm={};NODES.forEach(n=>nm[n.id]=n);
-  const colors={exit:'#E02020',elevator:'#E8A800',stairs:'#D06000',refuge:'#20A840',intersection:'#506070',door:'#707070'};
-  NODES.forEach(n=>{
-    const p=ws(n.x,n.y);
-    const isSmall=n.type==='intersection'||n.type==='door';
-    const r=isSmall?Math.max(2.5,s*0.035):Math.max(5,s*0.065);
-    const isOnPath=pathToExit?.includes(n.id);
-    ctx.beginPath(); ctx.arc(p.x,p.y,r,0,Math.PI*2);
-    ctx.fillStyle=isOnPath?'#5599FF':(colors[n.type]||'#888');
-    ctx.globalAlpha=0.7; ctx.fill(); ctx.globalAlpha=1;
-    if(n.label&&s>6){
-      ctx.fillStyle='#ddd'; ctx.font=`${Math.max(8,s*0.09)}px sans-serif`;
-      ctx.textAlign='center'; ctx.fillText(n.label,p.x,p.y-r-4);
+  const nm = {}; NODES.forEach(n => nm[n.id] = n);
+  const NC = { exit:'#E02020', elevator:'#E8A800', stairs:'#D06000', refuge:'#20A840', intersection:'#506070', door:'#707070' };
+  NODES.forEach(node => {
+    const p = ws(node.x, node.y);
+    const small = node.type === 'intersection' || node.type === 'door';
+    const r = small ? Math.max(2.5, s * 0.035) : Math.max(5, s * 0.065);
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = pathToExit?.includes(node.id) ? '#5599FF' : (NC[node.type] || '#888');
+    ctx.globalAlpha = 0.7; ctx.fill(); ctx.globalAlpha = 1;
+    if (node.label && s > 6) {
+      ctx.fillStyle = '#ddd'; ctx.font = `${Math.max(8, s * 0.09)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.fillText(node.label, p.x, p.y - r - 4);
     }
   });
 
-  // Exit ring + label
-  if(pathToExit&&pathToExit.length>0){
-    const en=nm[pathToExit[0]];
-    if(en){
-      const p=ws(en.x,en.y);
-      ctx.beginPath(); ctx.arc(p.x,p.y,Math.max(10,s*0.12),0,Math.PI*2);
-      ctx.strokeStyle='#4ade80'; ctx.lineWidth=3; ctx.stroke();
-      ctx.fillStyle='#4ade80'; ctx.font=`bold ${Math.max(10,s*0.14)}px sans-serif`;
-      ctx.textAlign='center'; ctx.fillText('🚪 EXIT',p.x,p.y-Math.max(10,s*0.12)-4);
+  // Exit highlight
+  if (pathToExit?.length > 0) {
+    const en = nm[pathToExit[0]];
+    if (en) {
+      const p = ws(en.x, en.y);
+      ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(10, s * 0.12), 0, Math.PI * 2);
+      ctx.strokeStyle = '#4ade80'; ctx.lineWidth = 3; ctx.stroke();
+      ctx.fillStyle = '#4ade80'; ctx.font = `bold ${Math.max(10, s * 0.14)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText('🚪 EXIT', p.x, p.y - Math.max(10, s * 0.12) - 4);
     }
   }
 
-  // User dot (red)
-  const un=nm[userNodeId];
-  if(un){
-    const p=ws(un.x,un.y);
-    ctx.beginPath(); ctx.arc(p.x,p.y,Math.max(16,s*0.18),0,Math.PI*2);
-    ctx.fillStyle='rgba(248,113,113,0.25)'; ctx.fill();
-    ctx.beginPath(); ctx.arc(p.x,p.y,Math.max(9,s*0.1),0,Math.PI*2);
-    ctx.fillStyle='#f87171'; ctx.fill(); ctx.strokeStyle='white'; ctx.lineWidth=2; ctx.stroke();
-    ctx.fillStyle='white'; ctx.font=`bold ${Math.max(10,s*0.12)}px sans-serif`;
-    ctx.textAlign='center';
-    ctx.fillText('📍 PERSON HERE',p.x,p.y-Math.max(10,s*0.12)-6);
+  // Person dot
+  const un = nm[userNodeId];
+  if (un) {
+    const p = ws(un.x, un.y);
+    ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(16, s * 0.18), 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(248,113,113,0.25)'; ctx.fill();
+    ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(9, s * 0.1), 0, Math.PI * 2);
+    ctx.fillStyle = '#f87171'; ctx.fill(); ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = 'white'; ctx.font = `bold ${Math.max(10, s * 0.12)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText('📍 PERSON HERE', p.x, p.y - Math.max(10, s * 0.12) - 6);
   }
 
-  // Floor label
-  ctx.fillStyle='rgba(255,255,255,0.4)'; ctx.font='12px sans-serif';
-  ctx.textAlign='left'; ctx.fillText('Ground Floor',10,H-10);
+  ctx.fillStyle = 'rgba(255,255,255,0.4)'; ctx.font = '12px sans-serif';
+  ctx.textAlign = 'left'; ctx.fillText('Ground Floor', 10, H - 10);
 }
 
 // ============================================================
 // MAIN
 // ============================================================
 async function main() {
-  const params=new URLSearchParams(window.location.search);
-  const alertId=params.get('alert');
-  if(!alertId){
-    document.getElementById('loading').style.display='none';
-    document.getElementById('error').style.display='flex';
-    document.getElementById('error-msg').textContent='No alert ID in URL.';
+  const params = new URLSearchParams(window.location.search);
+  const alertId = params.get('alert');
+  if (!alertId) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('error').style.display = 'flex';
+    document.getElementById('error-msg').textContent = 'No alert ID in URL.';
     return;
   }
-  try{
-    const alertDoc=await getDoc(doc(db,'rescue_alerts',alertId));
-    if(!alertDoc.exists()){
-      document.getElementById('loading').style.display='none';
-      document.getElementById('error').style.display='flex';
+  try {
+    const alertDoc = await getDoc(doc(db, 'rescue_alerts', alertId));
+    if (!alertDoc.exists()) {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('error').style.display = 'flex';
       return;
     }
-    const data=alertDoc.data();
-    const userLocation=data.location||'UC_T3';
-    const userName=data.userName||'Unknown User';
-    const timestamp=data.timestamp?.toDate?.()?.toLocaleString()||'Unknown';
-    document.getElementById('user-name').textContent='👤 '+userName;
-    document.getElementById('user-location').textContent=userLocation;
-    document.getElementById('alert-time').textContent=timestamp;
+    const data = alertDoc.data();
+    const userLocation = data.location || 'UC_T3';
+    const userName = data.userName || 'Unknown User';
+    const timestamp = data.timestamp?.toDate?.()?.toLocaleString() || 'Unknown';
+    document.getElementById('user-name').textContent = '👤 ' + userName;
+    document.getElementById('user-location').textContent = userLocation;
+    document.getElementById('alert-time').textContent = timestamp;
 
-    const result=findNearestExit(userLocation);
-    const exitNode=result?NODES.find(n=>n.id===result.exitId):null;
-    if(result){
-      const distFt=(result.distance*4).toFixed(0);
-      document.getElementById('path-info').innerHTML=
-        `<strong>Nearest exit:</strong> ${exitNode?.label||result.exitId} &nbsp;|&nbsp; `+
-        `<strong>Distance:</strong> ~${distFt} ft &nbsp;|&nbsp; `+
-        `<strong>Steps:</strong> ${result.path.length-1}`;
+    const result = findNearestExit(userLocation);
+    const exitNode = result ? NODES.find(n => n.id === result.exitId) : null;
+    if (result) {
+      const distFt = (result.distance * 4).toFixed(0);
+      document.getElementById('path-info').innerHTML =
+        `<strong>Nearest exit:</strong> ${exitNode?.label || result.exitId} &nbsp;|&nbsp; ` +
+        `<strong>Distance:</strong> ~${distFt} ft &nbsp;|&nbsp; ` +
+        `<strong>Steps:</strong> ${result.path.length - 1}`;
     } else {
-      document.getElementById('path-info').textContent='Could not calculate path to exit.';
+      document.getElementById('path-info').textContent = 'Could not calculate path to exit.';
     }
-    document.getElementById('loading').style.display='none';
-    document.getElementById('app').style.display='block';
-    drawMap(userLocation,result?.path);
-    window.addEventListener('resize',()=>drawMap(userLocation,result?.path));
-  }catch(err){
+
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+
+    // Set map container height
+    const container = document.getElementById('map-container');
+    container.style.height = (window.innerHeight - 220) + 'px';
+
+    const redraw = () => drawMap(userLocation, result?.path);
+    redraw();
+    window.addEventListener('resize', redraw);
+
+    // Pan + pinch zoom (same as MapView.jsx)
+    const canvas = document.getElementById('map-canvas');
+    canvas.style.cursor = 'grab';
+    let dragging = false, lastX = 0, lastY = 0, pinchDist = null;
+
+    canvas.addEventListener('mousedown', e => { dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.style.cursor = 'grabbing'; });
+    window.addEventListener('mousemove', e => { if (!dragging) return; view.offsetX += e.clientX - lastX; view.offsetY += e.clientY - lastY; lastX = e.clientX; lastY = e.clientY; redraw(); });
+    window.addEventListener('mouseup', () => { dragging = false; canvas.style.cursor = 'grab'; });
+    canvas.addEventListener('wheel', e => { e.preventDefault(); view.scale = Math.max(0.2, Math.min(8, view.scale * (e.deltaY < 0 ? 1.1 : 0.9))); redraw(); }, { passive: false });
+
+    canvas.addEventListener('touchstart', e => {
+      if (e.touches.length === 1) { dragging = true; lastX = e.touches[0].clientX; lastY = e.touches[0].clientY; }
+      else if (e.touches.length === 2) { pinchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); }
+    }, { passive: true });
+    canvas.addEventListener('touchmove', e => {
+      if (e.touches.length === 1 && dragging) { view.offsetX += e.touches[0].clientX - lastX; view.offsetY += e.touches[0].clientY - lastY; lastX = e.touches[0].clientX; lastY = e.touches[0].clientY; redraw(); }
+      else if (e.touches.length === 2 && pinchDist) { const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); view.scale = Math.max(0.2, Math.min(8, view.scale * (d / pinchDist))); pinchDist = d; redraw(); }
+    }, { passive: true });
+    canvas.addEventListener('touchend', e => { dragging = false; if (e.touches.length < 2) pinchDist = null; }, { passive: true });
+
+  } catch (err) {
     console.error(err);
-    document.getElementById('loading').style.display='none';
-    document.getElementById('error').style.display='flex';
-    document.getElementById('error-msg').textContent='Error: '+err.message;
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('error').style.display = 'flex';
+    document.getElementById('error-msg').textContent = 'Error: ' + err.message;
   }
 }
 main();
