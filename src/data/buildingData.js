@@ -1,328 +1,319 @@
 // ============================================================
 // SMART NAVIGATION FILTER — Building Data
-// Dorm Floor — L-Shaped Hallway
-// Scale: 1 unit = 4 feet  (matches Blender source exactly)
-// ============================================================
+// Scale: 1 unit = 1 foot
+// Origin: top-left corner of upper corridor
+// X grows RIGHT, Y grows DOWN — matches floor plan as drawn
 //
-// COORDINATE SYSTEM (mirrors Blender script 1:1):
-//   X = along horizontal hallway  (junction=0, far right=57.25 units / 229ft)
-//   Y = along vertical hallway    (junction=0, top=34 units / 136ft)
-//   L-junction corner at (0, 0)
+// UPPER SECTION  y=0..52, x=0..128
+//   Left bay (Elev+Stairs): x=0..12,   y=0..52
+//   Top walkway strip:      x=0..128,  y=0..10   (above LH3)
+//   Lecture Hall 3:         x=12..116, y=10..52  (room, not walkable)
+//   Right bay (Elev+Stairs):x=116..128, y=0..52
 //
-// HORIZONTAL HALL: Y=0, X=0..57.25
-//   Segments: 84ft + 15ft(elev) + 113ft + 17ft(endcap) = 229ft = 57.25 units
-//   - Elevator lobby bumps NORTH (+Y) at X=21..24.75  (84ft..99ft)
-//   - Stairs 2 bump-out SOUTH (−Y) near X=50 before end cap
+// CONNECTION CORRIDOR (right side spine):
+//   x=116..128, y=52..266   (214ft tall, 12ft wide)
 //
-// VERTICAL HALL: X=0, Y=0..34
-//   - Stairs 1 alcove bumps WEST (−X) at Y=26.25 (105ft)
-//   - Study room at top Y=34+
+// LOWER U-SHAPE  y=258..394
+//   Top bar:    x=0..128,  y=258..274
+//   Left leg:   x=0..16,   y=266..394
+//   Bottom bar: x=0..100,  y=378..394
+//   Right leg:  x=116..128, y=266..394  (same x as connection — seamless)
 //
-// REFUGE: tiny closet SOUTH (−Y) of junction
-//
+// EXITS:
+//   EXIT_LEFT:   x=0,   y=266  (left wall of lower top bar)
+//   EXIT_MID:    x=84,  y=278  (south wall of top bar, interior side)
+//   EXIT_LOUNGE: x=128, y=372  (right wall, below lounge)
 // ============================================================
 
 export const BUILDING = {
-  name: "Dorm_TopFloor",
-  width: 62,
-  height: 42,
+  name: "Rutgers_Building_Floor1",
+  width: 160,
+  height: 420,
   floor: 1,
 };
 
-// Half hallway width: 10ft / 2 / 4scale = 1.25 units
-const HW            = 1.25;
-
-// --- Horizontal hall X coordinates ---
-const X_ELEV_W      = 21;      // 84ft  → elevator lobby west edge
-const X_ELEV_E      = 24.75;   // 99ft  → elevator lobby east edge (15ft wide)
-const X_STAIR2      = 50;      // ~200ft → stairs 2 bump-out start
-const X_END_CAP     = 53.25;   // 213ft  → 17ft end cap start
-const X_FAR_EAST    = 57.25;   // 229ft  → far right end
-
-// --- Vertical hall Y coordinates ---
-const Y_STAIR1      = 26.25;   // 105ft up → stairs 1 alcove
-const Y_VERT_TOP    = 34;      // 136ft → top of vertical hall
-
-// --- Elevator lobby ---
-const ELEV_D        = 5.75;    // 23ft deep (north, +Y direction)
-
-// --- Stairs 1 alcove (west, −X) ---
-const S1_W          = 2.5;     // alcove width (10ft / 4)
-const S1_D          = 3.5;     // alcove depth (14ft / 4)
-
-// --- Stairs 2 bump-out (south, −Y) ---
-const S2_W          = 3.0;     // 12ft wide / 4
-const S2_D          = 2.5;     // 10ft deep / 4
-
-// --- Refuge ---
-const REF_W         = 1.0;
-const REF_D         = 1.0;
-
-// --- Study room ---
-const STUDY_W       = 7.5;
-const STUDY_D       = 6.25;
-
-// ============================================================
-// NAVIGATION NODES
-// ============================================================
 export const NODES = [
-  // === EXITS ===
-  { id: "EXIT_STAIRS1",   x: -(HW + S1_W + 0.5),              y: Y_STAIR1,                type: "exit",         accessible: false, label: "Exit — Stairs 1" },
-  { id: "EXIT_STAIRS2",   x: X_STAIR2 + S2_W / 2,            y: -(HW + S2_D + 0.5),      type: "exit",         accessible: false, label: "Exit — Stairs 2" },
-  { id: "EXIT_ELEVATOR",  x: (X_ELEV_W + X_ELEV_E) / 2,      y: HW + ELEV_D - 0.5,       type: "exit",         accessible: true,  label: "Exit — Elevator" },
 
-  // === STAIRS ===
-  { id: "STAIRS_1",       x: -(HW + S1_W),                    y: Y_STAIR1,                type: "stairs",       accessible: false, label: "Stairs 1" },
-  { id: "STAIRS_2",       x: X_STAIR2 + S2_W / 2,            y: -(HW + S2_D),             type: "stairs",       accessible: false, label: "Stairs 2" },
+  // ── UPPER LEFT BAY ─────────────────────────────────────────
+  { id: "ELEV_L",    x: 6,   y: 6,   type: "exit",         accessible: true,  label: "Left Elevator" },
+  { id: "STAIR_L",   x: 6,   y: 22,  type: "exit",         accessible: false, label: "Left Stairs"   },
+  { id: "UL_0",      x: 6,   y: 5,   type: "intersection", accessible: true  },
+  { id: "UL_1",      x: 6,   y: 28,  type: "intersection", accessible: true  },
+  { id: "UL_2",      x: 6,   y: 47,  type: "intersection", accessible: true,  label: "Upper Left"    },
 
-  // === ELEVATOR ===
-  { id: "ELEVATOR",       x: (X_ELEV_W + X_ELEV_E) / 2,      y: HW + ELEV_D / 2,         type: "elevator",     accessible: true,  label: "Elevator" },
+  // ── UPPER TOP WALKWAY (y=5, left→right) ────────────────────
+  { id: "UT_20",  x: 20,  y: 5,  type: "intersection", accessible: true },
+  { id: "UT_40",  x: 40,  y: 5,  type: "intersection", accessible: true },
+  { id: "UT_58",  x: 58,  y: 5,  type: "intersection", accessible: true, label: "Upper Center" },
+  { id: "UT_76",  x: 76,  y: 5,  type: "intersection", accessible: true },
+  { id: "UT_96",  x: 96,  y: 5,  type: "intersection", accessible: true },
+  { id: "UT_112", x: 112, y: 5,  type: "intersection", accessible: true },
 
-  // === REFUGE (south of junction) ===
-  { id: "REFUGE_1",       x: 0,                               y: -(HW + REF_D / 2),        type: "refuge",       accessible: true,  label: "Refuge Area" },
+  // ── UPPER RIGHT BAY ─────────────────────────────────────────
+  { id: "UR_0",      x: 122, y: 5,   type: "intersection", accessible: true  },
+  { id: "ELEV_R",    x: 122, y: 6,   type: "exit",         accessible: true,  label: "Right Elevator" },
+  { id: "STAIR_R",   x: 122, y: 22,  type: "exit",         accessible: false, label: "Right Stairs"   },
+  { id: "UR_1",      x: 122, y: 28,  type: "intersection", accessible: true,  label: "Right Doors"    },
+  { id: "UR_2",      x: 122, y: 47,  type: "intersection", accessible: true  },
+  { id: "UR_CORN",   x: 122, y: 52,  type: "intersection", accessible: true,  label: "Upper Right Corner" },
 
-  // === STUDY ROOM DOOR ===
-  { id: "STUDY_DOOR",     x: 0,                               y: Y_VERT_TOP + 0.5,         type: "door",         accessible: true,  label: "Study Room" },
+  // ── ENTRANCE ────────────────────────────────────────────────
+  { id: "ENTRANCE",  x: 30,  y: 66,  type: "door",         accessible: true,  label: "Main Entrance" },
 
-  // === VERTICAL HALLWAY NODES (X=0, bottom → top) ===
-  { id: "V_00",  x: 0,  y: 0,          type: "intersection", accessible: true },
-  { id: "V_04",  x: 0,  y: 4,          type: "intersection", accessible: true },
-  { id: "V_08",  x: 0,  y: 8,          type: "intersection", accessible: true },
-  { id: "V_12",  x: 0,  y: 12,         type: "intersection", accessible: true },
-  { id: "V_16",  x: 0,  y: 16,         type: "intersection", accessible: true },
-  { id: "V_20",  x: 0,  y: 20,         type: "intersection", accessible: true },
-  { id: "V_24",  x: 0,  y: 24,         type: "intersection", accessible: true },
-  { id: "V_S1",  x: 0,  y: Y_STAIR1,  type: "intersection", accessible: true, label: "Stairs 1 Junction" },
-  { id: "V_30",  x: 0,  y: 30,         type: "intersection", accessible: true },
-  { id: "V_34",  x: 0,  y: Y_VERT_TOP,type: "intersection", accessible: true },
+  // ── CONNECTION CORRIDOR (x=122, y=52→266) ──────────────────
+  { id: "CN_TOP",  x: 122, y: 52,  type: "intersection", accessible: true, label: "Connection Top" },
+  { id: "CN_1",    x: 122, y: 90,  type: "intersection", accessible: true },
+  { id: "CN_MID",  x: 122, y: 159, type: "intersection", accessible: true, label: "Connection Mid" },
+  { id: "CN_2",    x: 122, y: 220, type: "intersection", accessible: true },
+  { id: "CN_BOT",  x: 122, y: 258, type: "intersection", accessible: true, label: "Connection Bottom" },
 
-  // === HORIZONTAL HALLWAY NODES (Y=0, left → right) ===
-  { id: "H_05",   x: 5,               y: 0, type: "intersection", accessible: true },
-  { id: "H_10",   x: 10,              y: 0, type: "intersection", accessible: true },
-  { id: "H_15",   x: 15,              y: 0, type: "intersection", accessible: true },
-  { id: "H_ELEV", x: X_ELEV_W,       y: 0, type: "intersection", accessible: true, label: "Elevator Junction" },
-  { id: "H_25",   x: 25,              y: 0, type: "intersection", accessible: true },
-  { id: "H_30",   x: 30,              y: 0, type: "intersection", accessible: true },
-  { id: "H_35",   x: 35,              y: 0, type: "intersection", accessible: true },
-  { id: "H_40",   x: 40,              y: 0, type: "intersection", accessible: true },
-  { id: "H_45",   x: 45,              y: 0, type: "intersection", accessible: true },
-  { id: "H_S2",   x: X_STAIR2 + S2_W / 2, y: 0, type: "intersection", accessible: true, label: "Stairs 2 Junction" },
-  { id: "H_FAR",  x: X_FAR_EAST,     y: 0, type: "intersection", accessible: true },
+  // ── LOWER TOP BAR (y=266, x=0→122) ─────────────────────────
+  { id: "EXIT_LEFT", x: 0,   y: 266, type: "exit",         accessible: true,  label: "Exit — Left"   },
+  { id: "LL_JCT",   x: 8,   y: 266, type: "intersection", accessible: true,  label: "Lower Left Junction" },
+  { id: "LT_30",    x: 30,  y: 266, type: "intersection", accessible: true  },
+  { id: "LT_MID",   x: 58,  y: 266, type: "intersection", accessible: true,  label: "Lower Top Mid"  },
+  { id: "LT_86",    x: 86,  y: 266, type: "intersection", accessible: true  },
+  { id: "LR_JCT",   x: 122, y: 266, type: "intersection", accessible: true  },
 
-  // === ELEVATOR LOBBY ENTRY ===
-  { id: "ELEV_ENTRY", x: (X_ELEV_W + X_ELEV_E) / 2, y: HW + 0.5, type: "intersection", accessible: true },
+  // EXIT_MID — interior top-right of lower U (opening in south wall of top bar)
+  { id: "EXIT_MID",  x: 84,  y: 278, type: "exit",         accessible: true,  label: "Exit — Middle" },
+
+  // ── LOWER LEFT LEG (x=8, y=266→390) ───────────────────────
+  { id: "LL_1",   x: 8,  y: 295,  type: "intersection", accessible: true },
+  { id: "LL_2",   x: 8,  y: 330,  type: "intersection", accessible: true },
+  { id: "LL_3",   x: 8,  y: 362,  type: "intersection", accessible: true },
+  { id: "LL_BOT", x: 8,  y: 386,  type: "intersection", accessible: true, label: "Lower Bottom Left" },
+
+  // ── LOWER BOTTOM BAR (y=386, x=8→122) ──────────────────────
+  { id: "LB_1",   x: 36,  y: 386, type: "intersection", accessible: true },
+  { id: "LB_2",   x: 64,  y: 386, type: "intersection", accessible: true },
+  { id: "LB_3",   x: 92,  y: 386, type: "intersection", accessible: true },
+  { id: "LB_R",   x: 122, y: 386, type: "intersection", accessible: true, label: "Lower Bottom Right" },
+
+  // ── LOWER RIGHT LEG (x=122, y=386→266, same x as connection) ─
+  { id: "LR_1",   x: 122, y: 362,  type: "intersection", accessible: true },
+  { id: "LR_2",   x: 122, y: 330,  type: "intersection", accessible: true },
+  { id: "LR_3",   x: 122, y: 298,  type: "intersection", accessible: true },
+
+  // ── LOUNGE + EXIT LOUNGE ────────────────────────────────────
+  { id: "LOUNGE",     x: 138, y: 340, type: "refuge", accessible: true, label: "Lounge"        },
+  { id: "EXIT_LOUNGE",x: 138, y: 374, type: "exit",   accessible: true, label: "Exit — Lounge" },
 ];
 
-// ============================================================
-// EDGES
-// ============================================================
 export const EDGES = [
-  // VERTICAL HALLWAY (bottom → top)
-  { from: "V_00",  to: "V_04",   type: "corridor", accessible: true },
-  { from: "V_04",  to: "V_08",   type: "corridor", accessible: true },
-  { from: "V_08",  to: "V_12",   type: "corridor", accessible: true },
-  { from: "V_12",  to: "V_16",   type: "corridor", accessible: true },
-  { from: "V_16",  to: "V_20",   type: "corridor", accessible: true },
-  { from: "V_20",  to: "V_24",   type: "corridor", accessible: true },
-  { from: "V_24",  to: "V_S1",   type: "corridor", accessible: true },
-  { from: "V_S1",  to: "V_30",   type: "corridor", accessible: true },
-  { from: "V_30",  to: "V_34",   type: "corridor", accessible: true },
+  // Left bay
+  { from: "ELEV_L",  to: "UL_0",    type: "elevator", accessible: true  },
+  { from: "STAIR_L", to: "UL_1",    type: "stairs",   accessible: false },
+  { from: "UL_0",    to: "UL_1",    type: "corridor", accessible: true  },
+  { from: "UL_1",    to: "UL_2",    type: "corridor", accessible: true  },
 
-  // HORIZONTAL HALLWAY (left → right)
-  { from: "V_00",   to: "H_05",   type: "corridor", accessible: true },
-  { from: "H_05",   to: "H_10",   type: "corridor", accessible: true },
-  { from: "H_10",   to: "H_15",   type: "corridor", accessible: true },
-  { from: "H_15",   to: "H_ELEV", type: "corridor", accessible: true },
-  { from: "H_ELEV", to: "H_25",   type: "corridor", accessible: true },
-  { from: "H_25",   to: "H_30",   type: "corridor", accessible: true },
-  { from: "H_30",   to: "H_35",   type: "corridor", accessible: true },
-  { from: "H_35",   to: "H_40",   type: "corridor", accessible: true },
-  { from: "H_40",   to: "H_45",   type: "corridor", accessible: true },
-  { from: "H_45",   to: "H_S2",   type: "corridor", accessible: true },
-  { from: "H_S2",   to: "H_FAR",  type: "corridor", accessible: true },
+  // Top walkway (left → right)
+  { from: "UL_0",   to: "UT_20",   type: "corridor", accessible: true },
+  { from: "UT_20",  to: "UT_40",   type: "corridor", accessible: true },
+  { from: "UT_40",  to: "UT_58",   type: "corridor", accessible: true },
+  { from: "UT_58",  to: "UT_76",   type: "corridor", accessible: true },
+  { from: "UT_76",  to: "UT_96",   type: "corridor", accessible: true },
+  { from: "UT_96",  to: "UT_112",  type: "corridor", accessible: true },
+  { from: "UT_112", to: "UR_0",    type: "corridor", accessible: true },
 
-  // STAIRS 1 — west alcove off vertical hall at Y=105ft
-  { from: "V_S1",        to: "EXIT_STAIRS1",  type: "stairs",   accessible: false },
-  { from: "EXIT_STAIRS1",to: "STAIRS_1",      type: "stairs",   accessible: false },
+  // Right bay
+  { from: "UR_0",    to: "ELEV_R",   type: "elevator", accessible: true  },
+  { from: "UR_0",    to: "UR_1",     type: "corridor", accessible: true  },
+  { from: "UR_1",    to: "STAIR_R",  type: "stairs",   accessible: false },
+  { from: "UR_1",    to: "UR_2",     type: "corridor", accessible: true  },
+  { from: "UR_2",    to: "UR_CORN",  type: "corridor", accessible: true  },
 
-  // STAIRS 2 — south bump-out off horizontal hall near far right
-  { from: "H_S2",        to: "EXIT_STAIRS2",  type: "stairs",   accessible: false },
-  { from: "EXIT_STAIRS2",to: "STAIRS_2",      type: "stairs",   accessible: false },
+  // Left doors → entrance
+  { from: "UL_2",    to: "ENTRANCE", type: "door",     accessible: true },
 
-  // ELEVATOR — lobby north (+Y) from horizontal hall at X=84ft
-  { from: "H_ELEV",       to: "ELEV_ENTRY",    type: "corridor",  accessible: true },
-  { from: "ELEV_ENTRY",   to: "EXIT_ELEVATOR", type: "corridor",  accessible: true },
-  { from: "EXIT_ELEVATOR",to: "ELEVATOR",      type: "elevator",  accessible: true },
+  // Upper right corner → connection (x=122, seamless vertical)
+  { from: "UR_CORN", to: "CN_TOP",   type: "corridor", accessible: true },
 
-  // REFUGE — south of junction
-  { from: "V_00",  to: "REFUGE_1",   type: "corridor", accessible: true },
+  // Connection corridor (going down)
+  { from: "CN_TOP",  to: "CN_1",     type: "corridor", accessible: true },
+  { from: "CN_1",    to: "CN_MID",   type: "corridor", accessible: true },
+  { from: "CN_MID",  to: "CN_2",     type: "corridor", accessible: true },
+  { from: "CN_2",    to: "CN_BOT",   type: "corridor", accessible: true },
 
-  // STUDY ROOM
-  { from: "V_34",  to: "STUDY_DOOR", type: "door",     accessible: true },
+  // Connection bottom → lower right junction (x=122, seamless)
+  { from: "CN_BOT",  to: "LR_JCT",   type: "corridor", accessible: true },
+
+  // Lower top bar (left → right)
+  { from: "EXIT_LEFT",to: "LL_JCT",  type: "corridor", accessible: true },
+  { from: "LL_JCT",  to: "LT_30",    type: "corridor", accessible: true },
+  { from: "LT_30",   to: "LT_MID",   type: "corridor", accessible: true },
+  { from: "LT_MID",  to: "LT_86",    type: "corridor", accessible: true },
+  { from: "LT_86",   to: "LR_JCT",   type: "corridor", accessible: true },
+
+  // EXIT_MID branches off top bar (interior side)
+  { from: "LT_86",   to: "EXIT_MID", type: "corridor", accessible: true },
+
+  // Lower left leg (top → bottom)
+  { from: "LL_JCT",  to: "LL_1",     type: "corridor", accessible: true },
+  { from: "LL_1",    to: "LL_2",     type: "corridor", accessible: true },
+  { from: "LL_2",    to: "LL_3",     type: "corridor", accessible: true },
+  { from: "LL_3",    to: "LL_BOT",   type: "corridor", accessible: true },
+
+  // Lower bottom bar (left → right)
+  { from: "LL_BOT",  to: "LB_1",     type: "corridor", accessible: true },
+  { from: "LB_1",    to: "LB_2",     type: "corridor", accessible: true },
+  { from: "LB_2",    to: "LB_3",     type: "corridor", accessible: true },
+  { from: "LB_3",    to: "LB_R",     type: "corridor", accessible: true },
+
+  // Lower right leg (bottom → top, x=122 = same as connection above)
+  { from: "LB_R",    to: "LR_1",     type: "corridor", accessible: true },
+  { from: "LR_1",    to: "LR_2",     type: "corridor", accessible: true },
+  { from: "LR_2",    to: "LR_3",     type: "corridor", accessible: true },
+  { from: "LR_3",    to: "LR_JCT",   type: "corridor", accessible: true },
+
+  // Lounge branch
+  { from: "LR_2",    to: "LOUNGE",      type: "corridor", accessible: true },
+  { from: "LOUNGE",  to: "EXIT_LOUNGE", type: "corridor", accessible: true },
 ];
 
-// ============================================================
-// BEACON MAPPING
-// UUID: 426C7565-4368-6172-6D42-6561636F6E73 | Major: 3838
-// ============================================================
 export const BEACONS = [
   {
     id: "BEACON_1",
     uuid: "426C7565-4368-6172-6D42-6561636F6E73",
-    major: 3838,
-    minor: 4949,
-    nodeId: "V_30",
-    label: "Beacon 1 — Near Study Room",
-  },
-  {
-    id: "BEACON_5",
-    uuid: "426C7565-4368-6172-6D42-6561636F6E73",
-    major: 3838,
-    minor: 4953,
-    nodeId: "V_16",
-    label: "Beacon 5 — Mid Vertical Hall",
+    major: 3838, minor: 4949,
+    nodeId: "UT_58",
+    label: "Beacon 1 — Upper Center",
   },
   {
     id: "BEACON_2",
     uuid: "426C7565-4368-6172-6D42-6561636F6E73",
-    major: 3838,
-    minor: 4950,
-    nodeId: "V_00",
-    label: "Beacon 2 — Junction",
+    major: 3838, minor: 4950,
+    nodeId: "LT_MID",
+    label: "Beacon 2 — Lower Top Center",
   },
   {
     id: "BEACON_3",
     uuid: "426C7565-4368-6172-6D42-6561636F6E73",
-    major: 3838,
-    minor: 4951,
-    nodeId: "H_ELEV",
-    label: "Beacon 3 — Elevator",
-  },
-  {
-    id: "BEACON_6",
-    uuid: "426C7565-4368-6172-6D42-6561636F6E73",
-    major: 3838,
-    minor: 4954,
-    nodeId: "H_35",
-    label: "Beacon 6 — Mid Horizontal Hall",
-  },
-  {
-    id: "BEACON_7",
-    uuid: "426C7565-4368-6172-6D42-6561636F6E73",
-    major: 3838,
-    minor: 4955,
-    nodeId: "H_45",
-    label: "Beacon 7 — Near Stairs 2",
-  },
-  {
-    id: "BEACON_4",
-    uuid: "426C7565-4368-6172-6D42-6561636F6E73",
-    major: 3838,
-    minor: 4952,
-    nodeId: "H_FAR",
-    label: "Beacon 4 — Far End",
+    major: 3838, minor: 4951,
+    nodeId: "CN_MID",
+    label: "Beacon 3 — Connection Corridor",
   },
 ];
 
-// ============================================================
-// ROOM ZONES
-// ============================================================
+// Rooms — visual only, adjacent to corridors, never overlapping
 export const ZONES = [
-  { name: "Study\nRoom",     x: -(STUDY_W / 2),    y: Y_VERT_TOP,           w: STUDY_W,            h: STUDY_D,   color: "#A5D1FF" },
-  { name: "Stairs 1",        x: -(HW + S1_W),      y: Y_STAIR1 - S1_D / 2, w: S1_W,               h: S1_D,      color: "#FF8C2E" },
-  { name: "Elevator\nLobby", x: X_ELEV_W,          y: HW,                   w: X_ELEV_E - X_ELEV_W, h: ELEV_D,  color: "#FFCF3E" },
-  { name: "Stairs 2",        x: X_STAIR2,          y: -(HW + S2_D),         w: S2_W,               h: S2_D,      color: "#FF8C2E" },
-  { name: "Refuge\nArea",    x: -(REF_W / 2),      y: -(HW + REF_D),        w: REF_W,              h: REF_D,     color: "#40D465" },
+  // North of building
+  { name: "Room 4",  x: 0,   y: -24, w: 28,  h: 24, color: "#C8E6C9" },
+  { name: "Room 5",  x: 28,  y: -24, w: 28,  h: 24, color: "#C8E6C9" },
+  { name: "Room 6",  x: 56,  y: -24, w: 28,  h: 24, color: "#C8E6C9" },
+  { name: "Room 7",  x: 84,  y: -24, w: 32,  h: 24, color: "#C8E6C9" },
+
+  // Lecture Hall 3 — inside upper section (south of top walkway)
+  { name: "Lecture Hall 3", x: 12, y: 10, w: 104, h: 42, color: "#A5D1FF" },
+
+  // Extra rooms above lower U
+  { name: "Extra Room 1", x: 0,   y: 234, w: 34, h: 24, color: "#FFE0B2" },
+  { name: "Extra Room 2", x: 34,  y: 234, w: 34, h: 24, color: "#FFE0B2" },
+  { name: "Extra Room 3", x: 68,  y: 234, w: 30, h: 24, color: "#FFE0B2" },
+
+  // Lower interior (inside the U: x=16..116, y=274..378)
+  { name: "Lecture Hall 1", x: 16, y: 274, w: 44, h: 52, color: "#A5D1FF" },
+  { name: "Lecture Hall 2", x: 16, y: 326, w: 44, h: 52, color: "#A5D1FF" },
+  { name: "Classroom 5",    x: 60, y: 326, w: 28, h: 26, color: "#C8E6C9" },
+  { name: "Classroom 6",    x: 60, y: 352, w: 28, h: 26, color: "#C8E6C9" },
+
+  // Right of connection corridor (x=134..158)
+  { name: "Classroom 1", x: 134, y: 110, w: 24, h: 48, color: "#C8E6C9" },
+  { name: "Classroom 2", x: 134, y: 158, w: 24, h: 48, color: "#C8E6C9" },
+
+  // Left of lower left leg (x=-24..0)
+  { name: "Classroom 3",  x: -24, y: 274, w: 24, h: 36, color: "#C8E6C9" },
+  { name: "Classroom 4",  x: -24, y: 310, w: 24, h: 36, color: "#C8E6C9" },
+  { name: "Classroom 10", x: -24, y: 346, w: 24, h: 36, color: "#C8E6C9" },
+
+  // Lounge — right of right leg (x=134..158)
+  { name: "Lounge", x: 134, y: 314, w: 24, h: 58, color: "#A8E6CF" },
+
+  // Below bottom bar
+  { name: "Classroom 9", x: 8,   y: 394, w: 24, h: 20, color: "#C8E6C9" },
+  { name: "Classroom 8", x: 32,  y: 394, w: 28, h: 20, color: "#C8E6C9" },
+  { name: "Classroom 7", x: 60,  y: 394, w: 28, h: 20, color: "#C8E6C9" },
 ];
 
-// ============================================================
-// CORRIDOR ZONES
-// ============================================================
 export const CORRIDORS = [
-  { x: -HW, y: -HW,  w: HW * 2,               h: Y_VERT_TOP + HW,   label: "VERTICAL HALLWAY (136 ft)"   },
-  { x: -HW, y: -HW,  w: X_FAR_EAST + HW * 2,  h: HW * 2,            label: "HORIZONTAL HALLWAY (229 ft)" },
-  // elevator spur connector
-  { x: X_ELEV_W, y: HW - 0.25, w: X_ELEV_E - X_ELEV_W, h: 1.5 },
+  { x: 0,   y: 0,   w: 128, h: 10,  label: "Upper Top Walkway"   },
+  { x: 0,   y: 0,   w: 12,  h: 52,  label: "Upper Left Bay"      },
+  { x: 116, y: 0,   w: 12,  h: 52,  label: "Upper Right Bay"     },
+  { x: 116, y: 52,  w: 12,  h: 214, label: "Connection Corridor" },
+  { x: 0,   y: 258, w: 128, h: 16,  label: "Lower Top Bar"       },
+  { x: 0,   y: 266, w: 16,  h: 128, label: "Lower Left Leg"      },
+  { x: 0,   y: 378, w: 128, h: 16,  label: "Lower Bottom Bar"    },
+  { x: 116, y: 266, w: 12,  h: 128, label: "Lower Right Leg"     },
 ];
 
-// ============================================================
-// WALL SEGMENTS
-// ============================================================
 export const WALLS = [
-  // === VERTICAL HALLWAY — LEFT WALL (−X) ===
-  { x1: -HW, y1: -HW,                  x2: -HW, y2: Y_STAIR1 - S1_D / 2 },  // below stair alcove
-  { x1: -HW, y1: Y_STAIR1 + S1_D / 2, x2: -HW, y2: Y_VERT_TOP },            // above stair alcove
-
-  // === VERTICAL HALLWAY — RIGHT WALL (+X) ===
-  { x1: HW, y1: HW, x2: HW, y2: Y_VERT_TOP },
-
-  // === VERTICAL HALLWAY TOP — study room door gap ===
-  { x1: -HW,          y1: Y_VERT_TOP, x2: -(STUDY_W / 2), y2: Y_VERT_TOP },
-  { x1: HW,           y1: Y_VERT_TOP, x2:  (STUDY_W / 2), y2: Y_VERT_TOP },
-
-  // === HORIZONTAL HALLWAY — TOP WALL (+Y) ===
-  { x1: HW,      y1: HW, x2: X_ELEV_W, y2: HW },                             // left of elevator
-  { x1: X_ELEV_E,y1: HW, x2: X_FAR_EAST + HW, y2: HW },                     // right of elevator
-
-  // === HORIZONTAL HALLWAY — BOTTOM WALL (−Y) ===
-  { x1: -HW,         y1: -HW, x2: X_STAIR2,          y2: -HW },              // left of stair2
-  { x1: X_STAIR2 + S2_W, y1: -HW, x2: X_FAR_EAST + HW, y2: -HW },          // right of stair2
-
-  // === FAR RIGHT END CAP ===
-  { x1: X_FAR_EAST + HW, y1: -HW, x2: X_FAR_EAST + HW, y2: HW },
-
-  // === STUDY ROOM ===
-  { x1: -(STUDY_W / 2), y1: Y_VERT_TOP,           x2: -(STUDY_W / 2), y2: Y_VERT_TOP + STUDY_D },
-  { x1:  (STUDY_W / 2), y1: Y_VERT_TOP,           x2:  (STUDY_W / 2), y2: Y_VERT_TOP + STUDY_D },
-  { x1: -(STUDY_W / 2), y1: Y_VERT_TOP + STUDY_D, x2:  (STUDY_W / 2), y2: Y_VERT_TOP + STUDY_D },
-
-  // === STAIRS 1 ALCOVE (west of vertical hall at Y=105ft) ===
-  { x1: -(HW + S1_W), y1: Y_STAIR1 - S1_D / 2, x2: -(HW + S1_W), y2: Y_STAIR1 + S1_D / 2 },
-  { x1: -(HW + S1_W), y1: Y_STAIR1 - S1_D / 2, x2: -HW,           y2: Y_STAIR1 - S1_D / 2 },
-  { x1: -(HW + S1_W), y1: Y_STAIR1 + S1_D / 2, x2: -HW,           y2: Y_STAIR1 + S1_D / 2 },
-
-  // === ELEVATOR LOBBY (north/+Y from horizontal hall) ===
-  { x1: X_ELEV_W, y1: HW,           x2: X_ELEV_W, y2: HW + ELEV_D },        // west wall
-  { x1: X_ELEV_E, y1: HW,           x2: X_ELEV_E, y2: HW + ELEV_D },        // east wall
-  { x1: X_ELEV_W, y1: HW + ELEV_D, x2: X_ELEV_E,  y2: HW + ELEV_D },       // north wall
-
-  // === STAIRS 2 BUMP-OUT (south/−Y from horizontal hall) ===
-  { x1: X_STAIR2,         y1: -HW,           x2: X_STAIR2,          y2: -(HW + S2_D) },
-  { x1: X_STAIR2,         y1: -(HW + S2_D),  x2: X_STAIR2 + S2_W,  y2: -(HW + S2_D) },
-  { x1: X_STAIR2 + S2_W,  y1: -(HW + S2_D),  x2: X_STAIR2 + S2_W,  y2: -HW },
-
-  // === REFUGE CLOSET (south of junction) ===
-  { x1: -(REF_W / 2), y1: -HW,           x2: -(REF_W / 2), y2: -(HW + REF_D) },
-  { x1:  (REF_W / 2), y1: -HW,           x2:  (REF_W / 2), y2: -(HW + REF_D) },
-  { x1: -(REF_W / 2), y1: -(HW + REF_D), x2:  (REF_W / 2), y2: -(HW + REF_D) },
+  // Upper north wall
+  { x1: 0,   y1: 0,   x2: 128, y2: 0   },
+  // Left bay outer west wall
+  { x1: 0,   y1: 0,   x2: 0,   y2: 52  },
+  // Right bay outer east wall
+  { x1: 128, y1: 0,   x2: 128, y2: 52  },
+  // LH3 walls (top, left, right, bottom)
+  { x1: 12,  y1: 10,  x2: 116, y2: 10  },
+  { x1: 12,  y1: 10,  x2: 12,  y2: 52  },
+  { x1: 116, y1: 10,  x2: 116, y2: 52  },
+  { x1: 12,  y1: 52,  x2: 116, y2: 52  },
+  // Connection west wall
+  { x1: 116, y1: 52,  x2: 116, y2: 266 },
+  // Connection east wall
+  { x1: 128, y1: 52,  x2: 128, y2: 266 },
+  // Lower top bar
+  { x1: 0,   y1: 258, x2: 128, y2: 258 },
+  { x1: 0,   y1: 274, x2: 116, y2: 274 },
+  // Lower left leg
+  { x1: 0,   y1: 266, x2: 0,   y2: 394 },
+  { x1: 16,  y1: 274, x2: 16,  y2: 394 },
+  // Lower right leg
+  { x1: 116, y1: 274, x2: 116, y2: 394 },
+  { x1: 128, y1: 266, x2: 128, y2: 394 },
+  // Lower bottom bar
+  { x1: 0,   y1: 378, x2: 128, y2: 378 },
+  { x1: 0,   y1: 394, x2: 128, y2: 394 },
 ];
 
-// ============================================================
-// FIRE ZONES (for fire simulation / camera detection)
-// ============================================================
 export const FIRE_ZONES = {
-  elevator: {
-    label: "Elevator Fire",
-    blockedNodes: ["ELEVATOR", "ELEV_ENTRY"],
+  upper_left: {
+    label: "Fire — Upper Left",
+    blockedNodes: ["ELEV_L", "STAIR_L"],
     blockedEdges: [
-      { from: "H_ELEV", to: "ELEV_ENTRY" },
-      { from: "ELEV_ENTRY", to: "EXIT_ELEVATOR" },
+      { from: "ELEV_L",  to: "UL_0" },
+      { from: "STAIR_L", to: "UL_1" },
     ],
   },
-  stairs1: {
-    label: "Stairs 1 Fire",
-    blockedNodes: ["STAIRS_1", "EXIT_STAIRS1"],
+  upper_right: {
+    label: "Fire — Upper Right",
+    blockedNodes: ["ELEV_R", "STAIR_R"],
     blockedEdges: [
-      { from: "V_S1", to: "EXIT_STAIRS1" },
-      { from: "EXIT_STAIRS1", to: "STAIRS_1" },
+      { from: "UR_0", to: "ELEV_R"  },
+      { from: "UR_1", to: "STAIR_R" },
     ],
   },
-  stairs2: {
-    label: "Stairs 2 Fire",
-    blockedNodes: ["STAIRS_2", "EXIT_STAIRS2"],
+  exit_left: {
+    label: "Fire — Left Exit",
+    blockedNodes: ["EXIT_LEFT"],
+    blockedEdges: [{ from: "LL_JCT", to: "EXIT_LEFT" }],
+  },
+  exit_mid: {
+    label: "Fire — Middle Exit",
+    blockedNodes: ["EXIT_MID"],
+    blockedEdges: [{ from: "LT_86", to: "EXIT_MID" }],
+  },
+  exit_lounge: {
+    label: "Fire — Lounge Exit",
+    blockedNodes: ["EXIT_LOUNGE"],
+    blockedEdges: [{ from: "LOUNGE", to: "EXIT_LOUNGE" }],
+  },
+  connection: {
+    label: "Fire — Connection Corridor",
+    blockedNodes: ["CN_MID"],
     blockedEdges: [
-      { from: "H_S2", to: "EXIT_STAIRS2" },
-      { from: "EXIT_STAIRS2", to: "STAIRS_2" },
+      { from: "CN_1",   to: "CN_MID" },
+      { from: "CN_MID", to: "CN_2"   },
     ],
   },
 };

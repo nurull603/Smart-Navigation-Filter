@@ -23,7 +23,7 @@ export default function MapView({ profile, mode = 'navigate' }) {
   const containerRef = useRef(null);
 
   // View state
-  const [view, setView] = useState({ offsetX: 0, offsetY: 0, scale: 1 });
+  const [view, setView] = useState({ offsetX: 30, offsetY: 30, scale: 1.4 });
   const [isDragging, setIsDragging] = useState(false);
   const dragStart = useRef({ x: 0, y: 0, ox: 0, oy: 0 });
 
@@ -49,26 +49,19 @@ export default function MapView({ profile, mode = 'navigate' }) {
   // COORDINATE TRANSFORMS
   // ============================================================
   const worldToScreen = useCallback((wx, wy) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const cx = canvas.width / 2;
-    const cy = canvas.height / 2;
-    const s = view.scale * 10;
+    // Y increases downward — matches our building coordinate system
+    const s = view.scale;
     return {
-      x: cx + (wx * s) + view.offsetX,
-      y: cy + (-wy * s) + view.offsetY,
+      x: wx * s + view.offsetX,
+      y: wy * s + view.offsetY,
     };
   }, [view]);
 
   const screenToWorld = useCallback((sx, sy) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const cx = canvas.width / 2;
-    const cy = canvas.height / 2;
-    const s = view.scale * 10;
+    const s = view.scale;
     return {
-      x: (sx - cx - view.offsetX) / s,
-      y: -(sy - cy - view.offsetY) / s,
+      x: (sx - view.offsetX) / s,
+      y: (sy - view.offsetY) / s,
     };
   }, [view]);
 
@@ -136,7 +129,7 @@ export default function MapView({ profile, mode = 'navigate' }) {
     const ctx = canvas.getContext('2d');
     const W = canvas.width;
     const H = canvas.height;
-    const s = view.scale * 10;
+    const s = view.scale;   // 1 unit = 1 foot, scale px/ft
 
     // Clear
     ctx.fillStyle = '#12151c';
@@ -165,32 +158,46 @@ export default function MapView({ profile, mode = 'navigate' }) {
 
     // --- CORRIDOR ZONES ---
     CORRIDORS.forEach(c => {
-      const p = worldToScreen(c.x, c.y + c.h);
-      ctx.globalAlpha = 0.15;
-      ctx.fillStyle = '#6090B0';
+      const p = worldToScreen(c.x, c.y);
+      ctx.globalAlpha = 0.25;
+      ctx.fillStyle = '#8ab4cc';
       ctx.fillRect(p.x, p.y, c.w * s, c.h * s);
+      // Border
+      ctx.globalAlpha = 0.5;
+      ctx.strokeStyle = '#6090b0';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(p.x, p.y, c.w * s, c.h * s);
       ctx.globalAlpha = 1.0;
     });
 
     // --- ROOM ZONES ---
     ZONES.forEach(z => {
-      const p = worldToScreen(z.x, z.y + z.h);
-      ctx.globalAlpha = 0.4;
+      const p = worldToScreen(z.x, z.y);
+      ctx.globalAlpha = 0.45;
       ctx.fillStyle = z.color;
       ctx.fillRect(p.x, p.y, z.w * s, z.h * s);
+      ctx.globalAlpha = 0.7;
+      ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(p.x, p.y, z.w * s, z.h * s);
       ctx.globalAlpha = 1.0;
 
       // Room label
-      if (s > 5) {
+      if (s > 1.0) {
         const center = worldToScreen(z.x + z.w / 2, z.y + z.h / 2);
-        ctx.fillStyle = 'rgba(0,0,0,0.7)';
-        ctx.font = `${Math.max(8, s * 0.11)}px sans-serif`;
+        ctx.fillStyle = 'rgba(0,0,0,0.75)';
+        ctx.font = `bold ${Math.max(7, Math.min(11, s * 7))}px sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        const lines = z.name.split('\n');
-        lines.forEach((line, i) => {
-          ctx.fillText(line, center.x, center.y + (i - (lines.length - 1) / 2) * s * 0.14);
-        });
+        const lines = z.name.split(' ');
+        // Two-line label for long names
+        if (lines.length > 2 && z.w * s < 60) {
+          const mid = Math.ceil(lines.length / 2);
+          ctx.fillText(lines.slice(0, mid).join(' '), center.x, center.y - 5);
+          ctx.fillText(lines.slice(mid).join(' '), center.x, center.y + 6);
+        } else {
+          ctx.fillText(z.name, center.x, center.y);
+        }
       }
     });
 
@@ -211,9 +218,9 @@ export default function MapView({ profile, mode = 'navigate' }) {
     NODES.filter(n => n.type === 'exit').forEach(exit => {
       const p = worldToScreen(exit.x, exit.y);
       ctx.fillStyle = '#FF3030';
-      ctx.font = `bold ${Math.max(10, s * 0.14)}px sans-serif`;
+      ctx.font = `bold ${Math.max(9, s * 7)}px sans-serif`;
       ctx.textAlign = 'center';
-      ctx.fillText('🚪 ' + (exit.label || 'EXIT'), p.x, p.y - s * 0.22);
+      ctx.fillText('🚪 EXIT', p.x, p.y - s * 3.5);
     });
 
     // --- EDGES (graph connections) ---
@@ -256,7 +263,7 @@ export default function MapView({ profile, mode = 'navigate' }) {
     if (currentPath && currentPath.length > 1) {
       // Glow
       ctx.strokeStyle = 'rgba(50,130,255,0.3)';
-      ctx.lineWidth = Math.max(10, s * 0.12);
+      ctx.lineWidth = Math.max(8, s * 8);
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.beginPath();
@@ -271,7 +278,7 @@ export default function MapView({ profile, mode = 'navigate' }) {
 
       // Main line
       ctx.strokeStyle = '#3388FF';
-      ctx.lineWidth = Math.max(4, s * 0.055);
+      ctx.lineWidth = Math.max(3, s * 4);
       ctx.beginPath();
       currentPath.forEach((nodeId, i) => {
         const node = NODES.find(n => n.id === nodeId);
@@ -288,7 +295,8 @@ export default function MapView({ profile, mode = 'navigate' }) {
       NODES.forEach(node => {
         const p = worldToScreen(node.x, node.y);
         const isSmall = node.type === 'intersection' || node.type === 'door';
-        const r = isSmall ? Math.max(2.5, s * 0.035) : Math.max(5, s * 0.065);
+        // At scale=1.5: small nodes = 3px, special = 5px. Grows with zoom.
+        const r = isSmall ? Math.max(2.5, s * 2) : Math.max(4, s * 3.5);
 
         const isStart = node.id === selectedStart;
         const isEnd = node.id === selectedEnd;
@@ -332,11 +340,11 @@ export default function MapView({ profile, mode = 'navigate' }) {
         }
 
         // Labels for special nodes
-        if (node.label && s > 6) {
+        if (node.label && s > 2) {
           ctx.fillStyle = '#ddd';
-          ctx.font = `${Math.max(8, s * 0.09)}px sans-serif`;
+          ctx.font = `${Math.max(8, s * 6)}px sans-serif`;
           ctx.textAlign = 'center';
-          ctx.fillText(node.label, p.x, p.y - r - 4);
+          ctx.fillText(node.label, p.x, p.y - r - 3);
         }
       });
     }
@@ -347,9 +355,9 @@ export default function MapView({ profile, mode = 'navigate' }) {
       if (node) {
         const p = worldToScreen(node.x, node.y);
         ctx.fillStyle = '#00FF55';
-        ctx.font = `bold ${Math.max(10, s * 0.12)}px sans-serif`;
+        ctx.font = `bold ${Math.max(10, s * 8)}px sans-serif`;
         ctx.textAlign = 'center';
-        ctx.fillText('📍 YOU', p.x, p.y - s * 0.18);
+        ctx.fillText('📍 YOU', p.x, p.y - s * 4);
       }
     }
     if (selectedEnd && !emergencyMode) {
@@ -357,9 +365,9 @@ export default function MapView({ profile, mode = 'navigate' }) {
       if (node) {
         const p = worldToScreen(node.x, node.y);
         ctx.fillStyle = '#FF5555';
-        ctx.font = `bold ${Math.max(10, s * 0.12)}px sans-serif`;
+        ctx.font = `bold ${Math.max(10, s * 8)}px sans-serif`;
         ctx.textAlign = 'center';
-        ctx.fillText('🏁 DEST', p.x, p.y - s * 0.18);
+        ctx.fillText('🏁 DEST', p.x, p.y - s * 4);
       }
     }
 
@@ -378,7 +386,7 @@ export default function MapView({ profile, mode = 'navigate' }) {
         const midX = (n1.x + n2.x) / 2;
         const midY = (n1.y + n2.y) / 2;
         const p = worldToScreen(midX, midY);
-        ctx.font = `${Math.max(16, s * 0.2)}px sans-serif`;
+        ctx.font = `${Math.max(14, s * 10)}px sans-serif`;
         ctx.textAlign = 'center';
         ctx.fillText('🔥', p.x, p.y);
       });
@@ -415,7 +423,7 @@ export default function MapView({ profile, mode = 'navigate' }) {
     const delta = e.deltaY > 0 ? 0.9 : 1.1;
     setView(v => ({
       ...v,
-      scale: Math.min(8, Math.max(0.3, v.scale * delta)),
+      scale: Math.min(6, Math.max(0.4, v.scale * delta)),
     }));
   };
 
@@ -452,7 +460,7 @@ export default function MapView({ profile, mode = 'navigate' }) {
     let closestDist = Infinity;
     NODES.forEach(n => {
       const d = Math.sqrt((n.x - world.x) ** 2 + (n.y - world.y) ** 2);
-      if (d < closestDist && d < 2) {
+      if (d < closestDist && d < 8) {   // 8ft tolerance in world units
         closest = n.id;
         closestDist = d;
       }
@@ -486,7 +494,7 @@ export default function MapView({ profile, mode = 'navigate' }) {
     let closestDist = Infinity;
     NODES.forEach(n => {
       const d = Math.sqrt((n.x - world.x) ** 2 + (n.y - world.y) ** 2);
-      if (d < closestDist && d < 2) {
+      if (d < closestDist && d < 8) {
         closest = n;
         closestDist = d;
       }
