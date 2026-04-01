@@ -293,7 +293,7 @@ function PanicPage({ user, profile, onBack, currentLocation }) {
       const alertData = {
         userId: user.uid,
         userName: profile?.name || 'Unknown User',
-        location: currentLocation || 'V_00',
+        location: currentLocation || 'UC_T3',
         timestamp: serverTimestamp(),
         active: true,
         disabilities: profile?.disabilities || {},

@@ -272,8 +272,8 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
     rotX: Math.PI / 5,
     targetRotY: Math.PI / 4,
     targetRotX: Math.PI / 5,
-    distance: 75,
-    targetDistance: 75,
+    distance: 100,
+    targetDistance: 100,
     panX: 0,
     panZ: 0,
     targetPanX: 0,
@@ -288,9 +288,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
   const [directions, setDirections] = useState([]);
   const [currentStep, setCurrentStep] = useState(0);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [vibrationEnabled, setVibrationEnabled] = useState(
-    profile?.disabilities?.hearingImpaired ? true : false
-  );
+  const [vibrationEnabled, setVibrationEnabled] = useState(true);
   const [showVibGuide, setShowVibGuide] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
@@ -480,7 +478,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
     // --- SCENE ---
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0a0c12);
-    scene.fog = new THREE.Fog(0x0a0c12, 120, 250);
+    scene.fog = new THREE.Fog(0x0a0c12, 150, 350);
     sceneRef.current = scene;
 
     // --- CAMERA ---
@@ -688,11 +686,11 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
         // FIXED-ANGLE CAMERA — same tilt always, just pans to follow dot
         const pos = ctrl.followTarget || { x: 0, z: 0 };
 
-        // Fixed camera offset — larger for dorm building
-        const camOffsetX = -15;  // slightly left
-        const camOffsetZ = 35;   // behind
-        const camHeight = 40;    // above
-        const lookOffsetZ = -8;  // look ahead
+        // Fixed camera offset — Tillet building (scaled 1unit=4ft)
+        const camOffsetX = -18;  // offset
+        const camOffsetZ = 42;   // behind
+        const camHeight = 50;    // above
+        const lookOffsetZ = -10; // look ahead
 
         const targetCamX = pos.x + camOffsetX;
         const targetCamZ = pos.z + camOffsetZ;
@@ -820,30 +818,43 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
     return beaconSmoothed.current[beaconId];
   };
 
-  // Dorm L-shaped hallway — 7 beacons, 6 segments
-  // Order: B1(V_30) → B5(V_16) → B2(V_00) → B3(H_ELEV) → B6(H_35) → B7(H_45) → B4(H_FAR)
+  // Tillet Building — 7 beacons, L-shaped layout
+  // Tillet L-shape: Upper U + 214ft corridor + Lower U (1 unit = 4 feet)
+  // B1=UC_T3(16,1.25), B2=UC_L2(27.5,9), B3=CONN_Q2(2,40), B4=LT_MID(14.5,66.5), B5=LL_3(27,78.5), B6=LB_3(15,96.5), B7=LR_3(2,84.5)
   const BEACON_SEGMENTS = [
-    { from: 'BEACON_1', to: 'BEACON_5', waypoints: [  // Study Room → Mid Vertical
-      { x: 0, y: 30 }, { x: 0, y: 26.25 }, { x: 0, y: 20 }, { x: 0, y: 16 },
+    { from: 'BEACON_2', to: 'BEACON_1', waypoints: [  // Upper left bay → Top center
+      { x: 27.5, y: 9 }, { x: 27.5, y: 5 }, { x: 27.5, y: 1.25 }, { x: 24, y: 1.25 }, { x: 20, y: 1.25 }, { x: 16, y: 1.25 },
     ]},
-    { from: 'BEACON_5', to: 'BEACON_2', waypoints: [  // Mid Vertical → Junction
-      { x: 0, y: 16 }, { x: 0, y: 12 }, { x: 0, y: 8 }, { x: 0, y: 4 }, { x: 0, y: 0 },
+    { from: 'BEACON_1', to: 'BEACON_3', waypoints: [  // Top center → right bay → down 214ft corridor
+      { x: 16, y: 1.25 }, { x: 12, y: 1.25 }, { x: 8, y: 1.25 }, { x: 4, y: 1.25 }, { x: 2, y: 1.25 },
+      { x: 2, y: 5 }, { x: 2, y: 9 }, { x: 2, y: 13 }, { x: 2, y: 21 }, { x: 2, y: 29 }, { x: 2, y: 37 }, { x: 2, y: 40 },
     ]},
-    { from: 'BEACON_2', to: 'BEACON_3', waypoints: [  // Junction → Elevator
-      { x: 0, y: 0 }, { x: 5, y: 0 }, { x: 10, y: 0 }, { x: 15, y: 0 }, { x: 21, y: 0 },
+    { from: 'BEACON_3', to: 'BEACON_4', waypoints: [  // Corridor mid → lower top bar
+      { x: 2, y: 40 }, { x: 2, y: 48 }, { x: 2, y: 56 }, { x: 2, y: 66.5 },
+      { x: 6.5, y: 66.5 }, { x: 10.5, y: 66.5 }, { x: 14.5, y: 66.5 },
     ]},
-    { from: 'BEACON_3', to: 'BEACON_6', waypoints: [  // Elevator → Mid Horizontal
-      { x: 21, y: 0 }, { x: 25, y: 0 }, { x: 30, y: 0 }, { x: 35, y: 0 },
+    { from: 'BEACON_4', to: 'BEACON_5', waypoints: [  // Lower top bar → left leg
+      { x: 14.5, y: 66.5 }, { x: 18.5, y: 66.5 }, { x: 22.5, y: 66.5 }, { x: 27, y: 66.5 },
+      { x: 27, y: 70.5 }, { x: 27, y: 74.5 }, { x: 27, y: 78.5 },
     ]},
-    { from: 'BEACON_6', to: 'BEACON_7', waypoints: [  // Mid Horizontal → Near Stairs 2
-      { x: 35, y: 0 }, { x: 40, y: 0 }, { x: 45, y: 0 },
+    { from: 'BEACON_5', to: 'BEACON_6', waypoints: [  // Left leg → bottom bar
+      { x: 27, y: 78.5 }, { x: 27, y: 82.5 }, { x: 27, y: 86.5 }, { x: 27, y: 90.5 }, { x: 27, y: 96.5 },
+      { x: 23, y: 96.5 }, { x: 19, y: 96.5 }, { x: 15, y: 96.5 },
     ]},
-    { from: 'BEACON_7', to: 'BEACON_4', waypoints: [  // Near Stairs 2 → Far End
-      { x: 45, y: 0 }, { x: 51.5, y: 0 }, { x: 57.25, y: 0 },
+    { from: 'BEACON_6', to: 'BEACON_7', waypoints: [  // Bottom bar → right leg
+      { x: 15, y: 96.5 }, { x: 11, y: 96.5 }, { x: 6.5, y: 96.5 }, { x: 2, y: 96.5 },
+      { x: 2, y: 92.5 }, { x: 2, y: 88.5 }, { x: 2, y: 84.5 },
+    ]},
+    { from: 'BEACON_7', to: 'BEACON_4', waypoints: [  // Right leg → lower top (close lower loop)
+      { x: 2, y: 84.5 }, { x: 2, y: 80.5 }, { x: 2, y: 76.5 }, { x: 2, y: 72.5 },
+      { x: 2, y: 66.5 }, { x: 6.5, y: 66.5 }, { x: 10.5, y: 66.5 }, { x: 14.5, y: 66.5 },
+    ]},
+    { from: 'BEACON_7', to: 'BEACON_3', waypoints: [  // Right leg → corridor (via connection)
+      { x: 2, y: 84.5 }, { x: 2, y: 76.5 }, { x: 2, y: 66.5 }, { x: 2, y: 60 }, { x: 2, y: 52 }, { x: 2, y: 44 }, { x: 2, y: 40 },
     ]},
   ];
 
-  const BEACON_ORDER = ['BEACON_1', 'BEACON_5', 'BEACON_2', 'BEACON_3', 'BEACON_6', 'BEACON_7', 'BEACON_4'];
+  const BEACON_ORDER = ['BEACON_2', 'BEACON_1', 'BEACON_3', 'BEACON_4', 'BEACON_5', 'BEACON_6', 'BEACON_7'];
 
   // Interpolate position along a segment's waypoints
   const getSegmentPosition = (segment, ratio) => {
@@ -988,7 +999,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
       // Only set start if no active route
       if (!currentPath) {
         setSelectedStart(nearestNodeId);
-      if (onLocationUpdate) onLocationUpdate(nearestNodeId);
+        if (onLocationUpdate) onLocationUpdate(nearestNodeId);
       }
       const shortLabel = nearestLabel?.split('—')[1]?.trim() || nearestLabel || nearestNodeId;
       const now = Date.now();
@@ -1576,6 +1587,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
               setDirections(dirs);
               setCurrentStep(0);
               if (voiceEnabled) speak('Fire detected near ' + (zone?.label || data.zone) + '. Follow the blue path to safety.');
+              if (vibrationEnabled) vibrateEmergency();
             }
           }
         }
@@ -1588,7 +1600,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
     } catch (e) {
       // Firebase not available
     }
-  }, [emergencyMode, selectedStart, voiceEnabled, wheelchairMode, blockedEdges]);
+  }, [emergencyMode, selectedStart, voiceEnabled, vibrationEnabled, wheelchairMode, blockedEdges]);
 
   // ============================================================
   // MOUSE / TOUCH CONTROLS
@@ -1807,6 +1819,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
                 setDirections(dirs);
                 setCurrentStep(0);
                 if (voiceEnabled) speak('Evacuating. Follow the blue path.');
+                if (vibrationEnabled) vibrateEmergency();
               }
             }} style={{background:'rgba(255,80,80,0.85)',color:'#fff',border:'none',borderRadius:20,padding:'6px 12px',fontSize:'0.75rem'}}>
               🚨 Evacuate
