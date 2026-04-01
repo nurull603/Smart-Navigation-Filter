@@ -15,8 +15,6 @@ export const BUILDING = {
 // All coords = partner's coords / 4 (scale: 1 unit = 4 feet)
 export const NODES = [
   // === UPPER LEFT BAY ===
-  { id: "EXIT_UL_ELEV",  x: 27.5, y: 1,    type: "exit",         accessible: true,  label: "Exit — Left Elevator" },
-  { id: "EXIT_UL_STAIR", x: 27.5, y: 5.5,  type: "exit",         accessible: false, label: "Exit — Left Stairs" },
   { id: "UC_L0",         x: 27.5, y: 1.25, type: "intersection", accessible: true },
   { id: "UC_L1",         x: 27.5, y: 5,    type: "intersection", accessible: true },
   { id: "UC_L2",         x: 27.5, y: 9,    type: "intersection", accessible: true },
@@ -32,15 +30,13 @@ export const NODES = [
 
   // === UPPER RIGHT BAY ===
   { id: "UC_R0",         x: 2,  y: 1.25, type: "intersection", accessible: true },
-  { id: "EXIT_UR_ELEV",  x: 2,  y: 1,    type: "exit",         accessible: true,  label: "Exit — Right Elevator" },
-  { id: "EXIT_UR_STAIR", x: 2,  y: 5.5,  type: "exit",         accessible: false, label: "Exit — Right Stairs" },
   { id: "UC_R1",         x: 2,  y: 5,    type: "intersection", accessible: true },
   { id: "UC_R2",         x: 2,  y: 9,    type: "intersection", accessible: true },
   { id: "UC_R3",         x: 2,  y: 12,   type: "intersection", accessible: true },
   { id: "UC_R_CORNER",   x: 2,  y: 13,   type: "intersection", accessible: true, label: "Upper Right Corner" },
 
-  // === ENTRANCE (stairs — fire zone) ===
-  { id: "ENTRANCE", x: 21.5, y: 16, type: "door", accessible: true, label: "Entrance (Stairs)" },
+  // === ENTRANCE (stairs — exit + fire zone for demo) ===
+  { id: "ENTRANCE", x: 21.5, y: 16, type: "exit", accessible: true, label: "Entrance (Stairs)" },
 
   // === ROOM DOORS ===
   { id: "ROOM4",  x: 24, y: 0.5, type: "door", accessible: true, label: "Room 4" },
@@ -136,8 +132,6 @@ export const NODES = [
 
 export const EDGES = [
   // Upper left bay
-  { from: "EXIT_UL_ELEV",  to: "UC_L0", type: "elevator", accessible: true },
-  { from: "EXIT_UL_STAIR", to: "UC_L1", type: "stairs",   accessible: false },
   { from: "UC_L0", to: "UC_L1", type: "corridor", accessible: true },
   { from: "UC_L1", to: "UC_L2", type: "corridor", accessible: true },
   { from: "UC_L2", to: "UC_L3", type: "corridor", accessible: true },
@@ -150,9 +144,7 @@ export const EDGES = [
   { from: "UC_T5", to: "UC_T6", type: "corridor", accessible: true },
   { from: "UC_T6", to: "UC_R0", type: "corridor", accessible: true },
   // Upper right bay
-  { from: "UC_R0", to: "EXIT_UR_ELEV",  type: "elevator", accessible: true },
   { from: "UC_R0", to: "UC_R1",         type: "corridor", accessible: true },
-  { from: "UC_R1", to: "EXIT_UR_STAIR", type: "stairs",   accessible: false },
   { from: "UC_R1", to: "UC_R2",         type: "corridor", accessible: true },
   { from: "UC_R2", to: "UC_R3",         type: "corridor", accessible: true },
   { from: "UC_R3", to: "UC_R_CORNER",   type: "corridor", accessible: true },
@@ -468,22 +460,6 @@ export const WALLS = [
 ];
 
 export const FIRE_ZONES = {
-  elevator_left: {
-    label: "Left Elevator Fire",
-    blockedNodes: ["EXIT_UL_ELEV", "EXIT_UL_STAIR"],
-    blockedEdges: [
-      { from: "EXIT_UL_ELEV", to: "UC_L0" },
-      { from: "EXIT_UL_STAIR", to: "UC_L1" },
-    ],
-  },
-  elevator_right: {
-    label: "Right Elevator Fire",
-    blockedNodes: ["EXIT_UR_ELEV", "EXIT_UR_STAIR"],
-    blockedEdges: [
-      { from: "UC_R0", to: "EXIT_UR_ELEV" },
-      { from: "UC_R1", to: "EXIT_UR_STAIR" },
-    ],
-  },
   entrance: {
     label: "Entrance Stairs Fire",
     blockedNodes: ["ENTRANCE"],

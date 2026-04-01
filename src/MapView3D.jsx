@@ -708,11 +708,11 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
         camera.lookAt(ctrl._lookX, 0, ctrl._lookZ);
       } else {
         // FREE LOOK MODE — original orbit controls
-        ctrl.rotY += (ctrl.targetRotY - ctrl.rotY) * 0.08;
-        ctrl.rotX += (ctrl.targetRotX - ctrl.rotX) * 0.08;
-        ctrl.distance += (ctrl.targetDistance - ctrl.distance) * 0.08;
-        ctrl.panX += (ctrl.targetPanX - ctrl.panX) * 0.08;
-        ctrl.panZ += (ctrl.targetPanZ - ctrl.panZ) * 0.08;
+        ctrl.rotY += (ctrl.targetRotY - ctrl.rotY) * 0.12;
+        ctrl.rotX += (ctrl.targetRotX - ctrl.rotX) * 0.12;
+        ctrl.distance += (ctrl.targetDistance - ctrl.distance) * 0.12;
+        ctrl.panX += (ctrl.targetPanX - ctrl.panX) * 0.12;
+        ctrl.panZ += (ctrl.targetPanZ - ctrl.panZ) * 0.12;
 
         const cx = ctrl.panX + ctrl.distance * Math.sin(ctrl.rotY) * Math.cos(ctrl.rotX);
         const cy = ctrl.distance * Math.sin(ctrl.rotX);
@@ -996,10 +996,10 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
     if (nearestNodeId && nearestNodeId !== currentBeaconRef.current) {
       currentBeaconRef.current = nearestNodeId;
       setCurrentBeaconNode(nearestNodeId);
+      if (onLocationUpdate) onLocationUpdate(nearestNodeId);
       // Only set start if no active route
       if (!currentPath) {
         setSelectedStart(nearestNodeId);
-        if (onLocationUpdate) onLocationUpdate(nearestNodeId);
       }
       const shortLabel = nearestLabel?.split('—')[1]?.trim() || nearestLabel || nearestNodeId;
       const now = Date.now();
@@ -1639,8 +1639,8 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
 
   const handleWheel = (e) => {
     e.preventDefault();
-    controlsRef.current.targetDistance = Math.max(15, Math.min(120,
-      controlsRef.current.targetDistance + e.deltaY * 0.05
+    controlsRef.current.targetDistance = Math.max(10, Math.min(200,
+      controlsRef.current.targetDistance + e.deltaY * 0.06
     ));
   };
 
@@ -1667,6 +1667,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
       } else if (!selectedEnd) {
         if (nodeId !== selectedStart) {
           setSelectedEnd(nodeId);
+          if (onLocationUpdate) onLocationUpdate(nodeId);
         }
       } else {
         setSelectedStart(nodeId);
@@ -1718,8 +1719,8 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
       );
       if (touchRef.current.pinchDist) {
         const delta = touchRef.current.pinchDist - d;
-        controlsRef.current.targetDistance = Math.max(15, Math.min(120,
-          controlsRef.current.targetDistance + delta * 0.1
+        controlsRef.current.targetDistance = Math.max(10, Math.min(200,
+          controlsRef.current.targetDistance + delta * 0.12
         ));
       }
       touchRef.current.pinchDist = d;
