@@ -7,83 +7,25 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #0f1117; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
-
-    #header {
-      background: #cc2020;
-      padding: 14px 16px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
+    #header { background: #cc2020; padding: 14px 16px; display: flex; align-items: center; gap: 12px; }
     #header h1 { font-size: 1.1rem; color: white; font-weight: 700; }
     #header .pulse { width: 14px; height: 14px; border-radius: 50%; background: white; animation: pulse 1s infinite; flex-shrink: 0; }
     @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.3)} }
-
-    #info-bar {
-      background: #1a1d24;
-      padding: 12px 16px;
-      border-bottom: 1px solid #2a2d36;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
+    #info-bar { background: #1a1d24; padding: 12px 16px; border-bottom: 1px solid #2a2d36; display: flex; flex-direction: column; gap: 4px; }
     #info-bar .name { font-size: 1rem; font-weight: 700; color: white; }
     #info-bar .location { font-size: 0.85rem; color: #f87171; }
     #info-bar .time { font-size: 0.75rem; color: #6b7280; }
-
-    #map-container {
-      position: relative;
-      width: 100%;
-      overflow: hidden;
-      background: #0a0c12;
-    }
-
+    #map-container { position: relative; width: 100%; overflow: hidden; background: #0a0c12; }
     canvas { display: block; width: 100%; }
-
-    #legend {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      padding: 10px 16px;
-      background: #1a1d24;
-      border-top: 1px solid #2a2d36;
-      font-size: 0.75rem;
-    }
+    #legend { display: flex; flex-wrap: wrap; gap: 12px; padding: 10px 16px; background: #1a1d24; border-top: 1px solid #2a2d36; font-size: 0.75rem; }
     .legend-item { display: flex; align-items: center; gap: 5px; color: #8892a4; }
     .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-
-    #path-info {
-      padding: 12px 16px;
-      background: #152030;
-      border-top: 1px solid #2a3a4a;
-      font-size: 0.85rem;
-      color: #90b0d0;
-    }
+    #path-info { padding: 12px 16px; background: #152030; border-top: 1px solid #2a3a4a; font-size: 0.85rem; color: #90b0d0; }
     #path-info strong { color: white; }
-
-    #loading {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 60vh;
-      gap: 16px;
-      color: #6b7280;
-    }
+    #loading { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60vh; gap: 16px; color: #6b7280; }
     .spinner { width: 40px; height: 40px; border: 3px solid #2a2d36; border-top-color: #3b82f6; border-radius: 50%; animation: spin 0.8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-
-    #error {
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 60vh;
-      gap: 16px;
-      color: #f87171;
-      padding: 20px;
-      text-align: center;
-    }
+    #error { display: none; flex-direction: column; align-items: center; justify-content: center; min-height: 60vh; gap: 16px; color: #f87171; padding: 20px; text-align: center; }
   </style>
 </head>
 <body>
@@ -104,29 +46,25 @@
     <div class="pulse"></div>
     <h1>🆘 RESCUE ALERT — Active</h1>
   </div>
-
   <div id="info-bar">
     <div class="name" id="user-name">Loading...</div>
     <div class="location">📍 Last known location: <span id="user-location">—</span></div>
     <div class="time">Alert sent: <span id="alert-time">—</span></div>
   </div>
-
   <div id="map-container">
     <canvas id="map-canvas"></canvas>
   </div>
-
   <div id="legend">
-    <div class="legend-item"><div class="legend-dot" style="background:#f87171"></div> User Location</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#f87171"></div> Person Here</div>
     <div class="legend-item"><div class="legend-dot" style="background:#4ade80"></div> Nearest Exit</div>
-    <div class="legend-item"><div class="legend-dot" style="background:#60a5fa"></div> Your Path</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#60a5fa"></div> Path</div>
     <div class="legend-item"><div class="legend-dot" style="background:#e8a800"></div> Elevator</div>
-    <div class="legend-item"><div class="legend-dot" style="background:#ff8c2e"></div> Stairs</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#d06000"></div> Stairs</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#20a840"></div> Refuge/Lounge</div>
   </div>
-
   <div id="path-info">Loading path...</div>
 </div>
 
-<!-- Firebase SDK -->
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
@@ -144,305 +82,367 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
 // ============================================================
-// BUILDING DATA (inline - no imports needed)
+// BUILDING DATA — matches buildingData.js exactly
+// Scale: 1 unit = 4 feet | Y increases DOWN | X mirrored
 // ============================================================
-const HW = 1.25;
-const X_ELEV_W = 21, X_ELEV_E = 24.75;
-const X_STAIR2 = 50, X_FAR_EAST = 57.25;
-const Y_STAIR1 = 26.25, Y_VERT_TOP = 34;
-const ELEV_D = 5.75, S1_W = 2.5, S1_D = 3.5, S2_W = 3.0, S2_D = 2.5;
-
 const NODES = [
-  { id: "EXIT_STAIRS1", x: -(HW+S1_W+0.5), y: Y_STAIR1, type: "exit", label: "Exit — Stairs 1" },
-  { id: "EXIT_STAIRS2", x: X_STAIR2+S2_W/2, y: -(HW+S2_D+0.5), type: "exit", label: "Exit — Stairs 2" },
-  { id: "EXIT_ELEVATOR", x: (X_ELEV_W+X_ELEV_E)/2, y: HW+ELEV_D-0.5, type: "exit", label: "Exit — Elevator" },
-  { id: "ELEVATOR", x: (X_ELEV_W+X_ELEV_E)/2, y: HW+ELEV_D/2, type: "elevator", label: "Elevator" },
-  { id: "REFUGE_1", x: 0, y: -(HW+0.5), type: "refuge", label: "Refuge" },
-  { id: "V_00", x: 0, y: 0, type: "intersection" },
-  { id: "V_04", x: 0, y: 4, type: "intersection" },
-  { id: "V_08", x: 0, y: 8, type: "intersection" },
-  { id: "V_12", x: 0, y: 12, type: "intersection" },
-  { id: "V_16", x: 0, y: 16, type: "intersection" },
-  { id: "V_20", x: 0, y: 20, type: "intersection" },
-  { id: "V_24", x: 0, y: 24, type: "intersection" },
-  { id: "V_S1", x: 0, y: Y_STAIR1, type: "intersection", label: "Stairs 1 Junction" },
-  { id: "V_30", x: 0, y: 30, type: "intersection" },
-  { id: "V_34", x: 0, y: Y_VERT_TOP, type: "intersection" },
-  { id: "H_05", x: 5, y: 0, type: "intersection" },
-  { id: "H_10", x: 10, y: 0, type: "intersection" },
-  { id: "H_15", x: 15, y: 0, type: "intersection" },
-  { id: "H_ELEV", x: X_ELEV_W, y: 0, type: "intersection", label: "Elevator Junction" },
-  { id: "H_25", x: 25, y: 0, type: "intersection" },
-  { id: "H_30", x: 30, y: 0, type: "intersection" },
-  { id: "H_35", x: 35, y: 0, type: "intersection" },
-  { id: "H_40", x: 40, y: 0, type: "intersection" },
-  { id: "H_45", x: 45, y: 0, type: "intersection" },
-  { id: "H_S2", x: X_STAIR2+S2_W/2, y: 0, type: "intersection" },
-  { id: "H_FAR", x: X_FAR_EAST, y: 0, type: "intersection" },
-  { id: "ELEV_ENTRY", x: (X_ELEV_W+X_ELEV_E)/2, y: HW+0.5, type: "intersection" },
-  { id: "STAIRS_1", x: -(HW+S1_W), y: Y_STAIR1, type: "stairs" },
-  { id: "STAIRS_2", x: X_STAIR2+S2_W/2, y: -(HW+S2_D), type: "stairs" },
+  {id:"EXIT_UL_ELEV",  x:27.5,y:1,    type:"exit",   label:"Exit — Left Elevator"},
+  {id:"EXIT_UL_STAIR", x:27.5,y:5.5,  type:"exit",   label:"Exit — Left Stairs"},
+  {id:"UC_L0",         x:27.5,y:1.25, type:"intersection"},
+  {id:"UC_L1",         x:27.5,y:5,    type:"intersection"},
+  {id:"UC_L2",         x:27.5,y:9,    type:"intersection"},
+  {id:"UC_L3",         x:27.5,y:12,   type:"intersection"},
+  {id:"UC_T1",x:24,y:1.25,type:"intersection"},
+  {id:"UC_T2",x:20,y:1.25,type:"intersection"},
+  {id:"UC_T3",x:16,y:1.25,type:"intersection",label:"Upper Center"},
+  {id:"UC_T4",x:12,y:1.25,type:"intersection"},
+  {id:"UC_T5",x:8, y:1.25,type:"intersection"},
+  {id:"UC_T6",x:4, y:1.25,type:"intersection"},
+  {id:"UC_R0",         x:2,y:1.25,type:"intersection"},
+  {id:"EXIT_UR_ELEV",  x:2,y:1,   type:"exit",   label:"Exit — Right Elevator"},
+  {id:"EXIT_UR_STAIR", x:2,y:5.5, type:"exit",   label:"Exit — Right Stairs"},
+  {id:"UC_R1",         x:2,y:5,   type:"intersection"},
+  {id:"UC_R2",         x:2,y:9,   type:"intersection"},
+  {id:"UC_R3",         x:2,y:12,  type:"intersection"},
+  {id:"UC_R_CORNER",   x:2,y:13,  type:"intersection"},
+  {id:"ENTRANCE",x:21.5,y:16,type:"door",label:"Entrance"},
+  {id:"CONN_TOP",x:2,y:13,  type:"intersection"},
+  {id:"CONN_1",  x:2,y:17,  type:"intersection"},
+  {id:"CONN_2",  x:2,y:21,  type:"intersection"},
+  {id:"CONN_3",  x:2,y:25,  type:"intersection"},
+  {id:"CONN_4",  x:2,y:29,  type:"intersection"},
+  {id:"CONN_5",  x:2,y:33,  type:"intersection"},
+  {id:"CONN_6",  x:2,y:37,  type:"intersection"},
+  {id:"CONN_Q2", x:2,y:40,  type:"intersection",label:"Corridor Mid"},
+  {id:"CONN_7",  x:2,y:44,  type:"intersection"},
+  {id:"CONN_8",  x:2,y:48,  type:"intersection"},
+  {id:"CONN_9",  x:2,y:52,  type:"intersection"},
+  {id:"CONN_10", x:2,y:56,  type:"intersection"},
+  {id:"CONN_11", x:2,y:60,  type:"intersection"},
+  {id:"CONN_BOT",x:2,y:66.5,type:"intersection"},
+  {id:"LR_TOP",  x:2,   y:66.5,type:"intersection"},
+  {id:"LT_26",   x:6.5, y:66.5,type:"intersection"},
+  {id:"LT_42",   x:10.5,y:66.5,type:"intersection"},
+  {id:"LT_MID",  x:14.5,y:66.5,type:"intersection",label:"Lower Top Center"},
+  {id:"LT_74",   x:18.5,y:66.5,type:"intersection"},
+  {id:"LT_90",   x:22.5,y:66.5,type:"intersection"},
+  {id:"LT_L",    x:27,  y:66.5,type:"intersection",label:"Lower Left Junction"},
+  {id:"EXIT_LEFT",x:28, y:66.5,type:"exit",  label:"Exit — Left"},
+  {id:"LL_1",x:27,y:70.5,type:"intersection"},
+  {id:"LL_2",x:27,y:74.5,type:"intersection"},
+  {id:"LL_3",x:27,y:78.5,type:"intersection"},
+  {id:"LL_4",x:27,y:82.5,type:"intersection"},
+  {id:"LL_5",x:27,y:86.5,type:"intersection"},
+  {id:"LL_6",x:27,y:90.5,type:"intersection"},
+  {id:"LL_BOT",x:27,y:96.5,type:"intersection"},
+  {id:"LB_1",x:23,  y:96.5,type:"intersection"},
+  {id:"LB_2",x:19,  y:96.5,type:"intersection"},
+  {id:"LB_3",x:15,  y:96.5,type:"intersection"},
+  {id:"LB_4",x:11,  y:96.5,type:"intersection"},
+  {id:"LB_5",x:6.5, y:96.5,type:"intersection"},
+  {id:"LB_R",x:2,   y:96.5,type:"intersection"},
+  {id:"LR_1",x:2,y:92.5,type:"intersection"},
+  {id:"LR_2",x:2,y:88.5,type:"intersection"},
+  {id:"LR_3",x:2,y:84.5,type:"intersection"},
+  {id:"LR_4",x:2,y:80.5,type:"intersection"},
+  {id:"LR_5",x:2,y:76.5,type:"intersection"},
+  {id:"LR_6",x:2,y:72.5,type:"intersection"},
+  {id:"EXIT_CENTER",x:8,y:81,  type:"exit",   label:"Center Exit"},
+  {id:"LOUNGE",     x:2,y:85.5,type:"refuge", label:"Lounge"},
+  {id:"EXIT_RIGHT", x:1,y:85,  type:"exit",   label:"Exit — Right"},
 ];
 
 const EDGES = [
-  { from: "V_00", to: "V_04" }, { from: "V_04", to: "V_08" },
-  { from: "V_08", to: "V_12" }, { from: "V_12", to: "V_16" },
-  { from: "V_16", to: "V_20" }, { from: "V_20", to: "V_24" },
-  { from: "V_24", to: "V_S1" }, { from: "V_S1", to: "V_30" },
-  { from: "V_30", to: "V_34" },
-  { from: "V_00", to: "H_05" }, { from: "H_05", to: "H_10" },
-  { from: "H_10", to: "H_15" }, { from: "H_15", to: "H_ELEV" },
-  { from: "H_ELEV", to: "H_25" }, { from: "H_25", to: "H_30" },
-  { from: "H_30", to: "H_35" }, { from: "H_35", to: "H_40" },
-  { from: "H_40", to: "H_45" }, { from: "H_45", to: "H_S2" },
-  { from: "H_S2", to: "H_FAR" },
-  { from: "V_S1", to: "EXIT_STAIRS1" }, { from: "EXIT_STAIRS1", to: "STAIRS_1" },
-  { from: "H_S2", to: "EXIT_STAIRS2" }, { from: "EXIT_STAIRS2", to: "STAIRS_2" },
-  { from: "H_ELEV", to: "ELEV_ENTRY" }, { from: "ELEV_ENTRY", to: "EXIT_ELEVATOR" },
-  { from: "EXIT_ELEVATOR", to: "ELEVATOR" },
-  { from: "V_00", to: "REFUGE_1" },
+  {from:"EXIT_UL_ELEV",to:"UC_L0"},{from:"EXIT_UL_STAIR",to:"UC_L1"},
+  {from:"UC_L0",to:"UC_L1"},{from:"UC_L1",to:"UC_L2"},{from:"UC_L2",to:"UC_L3"},
+  {from:"UC_L0",to:"UC_T1"},{from:"UC_T1",to:"UC_T2"},{from:"UC_T2",to:"UC_T3"},
+  {from:"UC_T3",to:"UC_T4"},{from:"UC_T4",to:"UC_T5"},{from:"UC_T5",to:"UC_T6"},
+  {from:"UC_T6",to:"UC_R0"},
+  {from:"UC_R0",to:"EXIT_UR_ELEV"},{from:"UC_R0",to:"UC_R1"},
+  {from:"UC_R1",to:"EXIT_UR_STAIR"},{from:"UC_R1",to:"UC_R2"},
+  {from:"UC_R2",to:"UC_R3"},{from:"UC_R3",to:"UC_R_CORNER"},
+  {from:"UC_L3",to:"ENTRANCE"},
+  {from:"UC_R_CORNER",to:"CONN_TOP"},
+  {from:"CONN_TOP",to:"CONN_1"},{from:"CONN_1",to:"CONN_2"},{from:"CONN_2",to:"CONN_3"},
+  {from:"CONN_3",to:"CONN_4"},{from:"CONN_4",to:"CONN_5"},{from:"CONN_5",to:"CONN_6"},
+  {from:"CONN_6",to:"CONN_Q2"},{from:"CONN_Q2",to:"CONN_7"},{from:"CONN_7",to:"CONN_8"},
+  {from:"CONN_8",to:"CONN_9"},{from:"CONN_9",to:"CONN_10"},{from:"CONN_10",to:"CONN_11"},
+  {from:"CONN_11",to:"CONN_BOT"},{from:"CONN_BOT",to:"LR_TOP"},
+  {from:"LR_TOP",to:"LT_26"},{from:"LT_26",to:"LT_42"},{from:"LT_42",to:"LT_MID"},
+  {from:"LT_MID",to:"LT_74"},{from:"LT_74",to:"LT_90"},{from:"LT_90",to:"LT_L"},
+  {from:"LT_L",to:"EXIT_LEFT"},
+  {from:"LT_L",to:"LL_1"},{from:"LL_1",to:"LL_2"},{from:"LL_2",to:"LL_3"},
+  {from:"LL_3",to:"LL_4"},{from:"LL_4",to:"LL_5"},{from:"LL_5",to:"LL_6"},
+  {from:"LL_6",to:"LL_BOT"},
+  {from:"LL_BOT",to:"LB_1"},{from:"LB_1",to:"LB_2"},{from:"LB_2",to:"LB_3"},
+  {from:"LB_3",to:"LB_4"},{from:"LB_4",to:"LB_5"},{from:"LB_5",to:"LB_R"},
+  {from:"LB_R",to:"LR_1"},{from:"LR_1",to:"LR_2"},{from:"LR_2",to:"LR_3"},
+  {from:"LR_3",to:"LR_4"},{from:"LR_4",to:"LR_5"},{from:"LR_5",to:"LR_6"},
+  {from:"LR_6",to:"LR_TOP"},
+  {from:"LR_4",to:"EXIT_CENTER"},
+  {from:"LR_3",to:"LOUNGE"},{from:"LOUNGE",to:"EXIT_RIGHT"},
+];
+
+const ZONES = [
+  {name:"Room 4",        x:21,  y:-6,   w:7,   h:6,    color:"#C8E6C9"},
+  {name:"Room 5",        x:14,  y:-6,   w:7,   h:6,    color:"#C8E6C9"},
+  {name:"Room 6",        x:7,   y:-6,   w:7,   h:6,    color:"#C8E6C9"},
+  {name:"Room 7",        x:0,   y:-6,   w:7,   h:6,    color:"#C8E6C9"},
+  {name:"Elevator",      x:29,  y:-2,   w:4,   h:5,    color:"#FFD54F"},
+  {name:"Stairs",        x:29,  y:3,    w:4,   h:6,    color:"#FFAB91"},
+  {name:"Elevator",      x:-4,  y:-2,   w:4,   h:5,    color:"#FFD54F"},
+  {name:"Stairs",        x:-4,  y:3,    w:4,   h:6,    color:"#FFAB91"},
+  {name:"Lecture Hall 3",x:3,   y:2.5,  w:23,  h:8,    color:"#A5D1FF"},
+  {name:"Classroom 1",   x:-6,  y:27.5, w:6,   h:13,   color:"#C8E6C9"},
+  {name:"Classroom 2",   x:-6,  y:40.5, w:6,   h:13,   color:"#C8E6C9"},
+  {name:"Extra Room 1",  x:20.5,y:58.5, w:8.5, h:6,    color:"#FFE0B2"},
+  {name:"Extra Room 2",  x:12,  y:58.5, w:8.5, h:6,    color:"#FFE0B2"},
+  {name:"Extra Room 3",  x:4,   y:58.5, w:8,   h:6,    color:"#FFE0B2"},
+  {name:"Classroom 3",   x:29,  y:68.5, w:6,   h:9.5,  color:"#C8E6C9"},
+  {name:"Classroom 4",   x:29,  y:78,   w:6,   h:9.5,  color:"#C8E6C9"},
+  {name:"Classroom 10",  x:29,  y:87.5, w:6,   h:7,    color:"#C8E6C9"},
+  {name:"Lecture Hall 1",x:12,  y:71,   w:10,  h:10.5, color:"#A5D1FF"},
+  {name:"Lecture Hall 2",x:12,  y:81.5, w:10,  h:10.5, color:"#A5D1FF"},
+  {name:"Classroom 5",   x:7,   y:81.5, w:5,   h:5.25, color:"#C8E6C9"},
+  {name:"Classroom 6",   x:7,   y:86.75,w:5,   h:5.25, color:"#C8E6C9"},
+  {name:"Lounge",        x:0,   y:79,   w:4,   h:13.5, color:"#A8E6CF"},
+  {name:"Classroom 9",   x:21.5,y:98.5, w:5.5, h:5.5,  color:"#C8E6C9"},
+  {name:"Classroom 8",   x:14.5,y:98.5, w:7,   h:5.5,  color:"#C8E6C9"},
+  {name:"Classroom 7",   x:8,   y:98.5, w:6.5, h:5.5,  color:"#C8E6C9"},
+];
+
+const CORRIDORS = [
+  {x:0, y:0,   w:29,h:2.5 },{x:26,y:0,   w:3, h:13  },{x:0, y:0,   w:3, h:13  },
+  {x:0, y:10.5,w:29,h:2.5 },{x:16,y:13,  w:10,h:3   },{x:0, y:13,  w:4, h:53.5},
+  {x:0, y:64.5,w:29,h:4   },{x:25,y:64.5,w:4, h:34  },{x:0, y:94.5,w:29,h:4   },
+  {x:0, y:64.5,w:4, h:34  },{x:4, y:68.5,w:3, h:23.5},{x:22,y:68.5,w:3, h:23.5},
+  {x:7, y:68.5,w:15,h:2.5 },{x:7, y:92,  w:15,h:2.5 },
+];
+
+const WALLS = [
+  {x1:0,y1:-6,x2:29,y2:-6},{x1:7,y1:-6,x2:7,y2:0},{x1:14,y1:-6,x2:14,y2:0},{x1:21,y1:-6,x2:21,y2:0},
+  {x1:0,y1:0,x2:29,y2:0},
+  {x1:29,y1:-2,x2:33,y2:-2},{x1:33,y1:-2,x2:33,y2:9},{x1:29,y1:9,x2:33,y2:9},{x1:29,y1:3,x2:33,y2:3},
+  {x1:-4,y1:-2,x2:0,y2:-2},{x1:-4,y1:-2,x2:-4,y2:9},{x1:-4,y1:9,x2:0,y2:9},{x1:-4,y1:3,x2:0,y2:3},
+  {x1:29,y1:-6,x2:29,y2:-2},{x1:29,y1:9,x2:29,y2:13},{x1:0,y1:-6,x2:0,y2:-2},{x1:0,y1:9,x2:0,y2:13},
+  {x1:3,y1:2.5,x2:26,y2:2.5},{x1:3,y1:2.5,x2:3,y2:10.5},{x1:26,y1:2.5,x2:26,y2:10.5},
+  {x1:3,y1:10.5,x2:4,y2:10.5},{x1:6,y1:10.5,x2:23,y2:10.5},{x1:25,y1:10.5,x2:26,y2:10.5},
+  {x1:4,y1:13,x2:16,y2:13},{x1:26,y1:13,x2:29,y2:13},
+  {x1:4,y1:13,x2:4,y2:64.5},
+  {x1:0,y1:13,x2:0,y2:33},{x1:0,y1:35,x2:0,y2:46},{x1:0,y1:48,x2:0,y2:64.5},
+  {x1:-6,y1:27.5,x2:0,y2:27.5},{x1:-6,y1:27.5,x2:-6,y2:53.5},{x1:-6,y1:40.5,x2:0,y2:40.5},{x1:-6,y1:53.5,x2:0,y2:53.5},
+  {x1:4,y1:64.5,x2:29,y2:64.5},
+  {x1:29,y1:64.5,x2:29,y2:65.5},{x1:29,y1:67.5,x2:29,y2:98.5},
+  {x1:0,y1:98.5,x2:29,y2:98.5},
+  {x1:0,y1:64.5,x2:0,y2:79},{x1:0,y1:80,x2:0,y2:84},{x1:0,y1:86,x2:0,y2:92},{x1:0,y1:93,x2:0,y2:98.5},
+  {x1:35,y1:68.5,x2:35,y2:94.5},{x1:29,y1:78,x2:35,y2:78},{x1:29,y1:87.5,x2:35,y2:87.5},{x1:29,y1:68.5,x2:35,y2:68.5},{x1:29,y1:94.5,x2:35,y2:94.5},
+  {x1:0,y1:79,x2:4,y2:79},{x1:0,y1:92.5,x2:4,y2:92.5},
+  {x1:8,y1:104,x2:27,y2:104},{x1:8,y1:98.5,x2:8,y2:104},{x1:27,y1:98.5,x2:27,y2:104},{x1:14.5,y1:98.5,x2:14.5,y2:104},{x1:21.5,y1:98.5,x2:21.5,y2:104},
+  {x1:7,y1:71,x2:22,y2:71},{x1:7,y1:92,x2:22,y2:92},{x1:22,y1:71,x2:22,y2:92},
+  {x1:7,y1:71,x2:7,y2:79},{x1:7,y1:79,x2:9.5,y2:79},{x1:9.5,y1:79,x2:9.5,y2:83},{x1:9.5,y1:83,x2:7,y2:83},{x1:7,y1:83,x2:7,y2:92},
+  {x1:9.5,y1:81.5,x2:22,y2:81.5},{x1:7,y1:86.75,x2:12,y2:86.75},{x1:12,y1:81.5,x2:12,y2:92},
+  {x1:27,y1:65.5,x2:29,y2:65.5},{x1:27,y1:67.5,x2:29,y2:67.5},{x1:27,y1:65.5,x2:27,y2:67.5},
+  {x1:0,y1:84,x2:2,y2:84},{x1:0,y1:86,x2:2,y2:86},{x1:2,y1:84,x2:2,y2:86},
 ];
 
 // ============================================================
 // DIJKSTRA
 // ============================================================
 function dijkstra(startId, endId) {
-  const adj = {};
-  const nodeMap = {};
-  NODES.forEach(n => { adj[n.id] = []; nodeMap[n.id] = n; });
-  EDGES.forEach(e => {
-    const n1 = nodeMap[e.from], n2 = nodeMap[e.to];
-    if (!n1 || !n2) return;
-    const d = Math.sqrt((n1.x-n2.x)**2 + (n1.y-n2.y)**2);
-    adj[e.from].push({ node: e.to, dist: d });
-    adj[e.to].push({ node: e.from, dist: d });
+  const adj={},nm={};
+  NODES.forEach(n=>{adj[n.id]=[];nm[n.id]=n;});
+  EDGES.forEach(e=>{
+    const n1=nm[e.from],n2=nm[e.to]; if(!n1||!n2) return;
+    const d=Math.sqrt((n1.x-n2.x)**2+(n1.y-n2.y)**2);
+    adj[e.from].push({node:e.to,dist:d}); adj[e.to].push({node:e.from,dist:d});
   });
-  const dist = {}, prev = {}, visited = new Set();
-  NODES.forEach(n => dist[n.id] = Infinity);
-  dist[startId] = 0;
-  while (true) {
-    let minNode = null, minDist = Infinity;
-    for (const id in dist) {
-      if (!visited.has(id) && dist[id] < minDist) { minDist = dist[id]; minNode = id; }
-    }
-    if (!minNode || minNode === endId) break;
-    visited.add(minNode);
-    for (const nb of (adj[minNode] || [])) {
-      if (visited.has(nb.node)) continue;
-      const nd = dist[minNode] + nb.dist;
-      if (nd < dist[nb.node]) { dist[nb.node] = nd; prev[nb.node] = minNode; }
+  const dist={},prev={},vis=new Set();
+  NODES.forEach(n=>dist[n.id]=Infinity); dist[startId]=0;
+  while(true){
+    let mn=null,md=Infinity;
+    for(const id in dist){if(!vis.has(id)&&dist[id]<md){md=dist[id];mn=id;}}
+    if(!mn||mn===endId) break; vis.add(mn);
+    for(const nb of(adj[mn]||[])){
+      if(vis.has(nb.node)) continue;
+      const nd=dist[mn]+nb.dist;
+      if(nd<dist[nb.node]){dist[nb.node]=nd;prev[nb.node]=mn;}
     }
   }
-  if (dist[endId] === Infinity) return null;
-  const path = [];
-  let cur = endId;
-  while (cur) { path.unshift(cur); cur = prev[cur]; }
-  return { path, distance: dist[endId] };
+  if(dist[endId]===Infinity) return null;
+  const path=[]; let cur=endId;
+  while(cur){path.unshift(cur);cur=prev[cur];}
+  return {path,distance:dist[endId]};
 }
 
 function findNearestExit(startId) {
-  const exits = NODES.filter(n => n.type === "exit");
-  let best = null;
-  for (const exit of exits) {
-    const r = dijkstra(startId, exit.id);
-    if (r && (!best || r.distance < best.distance)) best = { ...r, exitId: exit.id };
-  }
+  const exits=NODES.filter(n=>n.type==='exit'); let best=null;
+  for(const e of exits){const r=dijkstra(startId,e.id);if(r&&(!best||r.distance<best.distance))best={...r,exitId:e.id};}
   return best;
 }
 
 // ============================================================
-// 2D MAP DRAWING
+// DRAW MAP
 // ============================================================
-function drawMap(userNodeId, pathFromExit) {
-  const canvas = document.getElementById('map-canvas');
-  const container = document.getElementById('map-container');
-  const W = container.clientWidth || window.innerWidth;
-  const H = W * 1.2;
-  canvas.width = W;
-  canvas.height = H;
-  container.style.height = H + 'px';
+function drawMap(userNodeId, pathToExit) {
+  const canvas=document.getElementById('map-canvas');
+  const container=document.getElementById('map-container');
+  const W=container.clientWidth||window.innerWidth;
+  const H=Math.round(W*3.0); // tall enough for the building
+  canvas.width=W; canvas.height=H; container.style.height=H+'px';
+  const ctx=canvas.getContext('2d');
+  ctx.fillStyle='#12151c'; ctx.fillRect(0,0,W,H);
 
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, W, H);
+  // EXACT same coordinate system as MapView.jsx:
+  // x = cx + (wx * s) + offsetX
+  // y = cy + (-wy * s) + offsetY   ← Y is negated
+  const s = Math.min(W / 50, H / 125); // fit full building width+height
+  const cx = W/2 - 14.5*s;  // center x range (-6..35, center=14.5)
+  const cy = H/2 + 49*s;    // center y range (-6..104, center=49), negated Y
+  const ws = (wx,wy) => ({ x: cx + wx*s, y: cy + (-wy*s) });
 
-  // Calculate scale and offset to fit building
-  const padding = 40;
-  const bldW = X_FAR_EAST + HW * 2;
-  const bldH = Y_VERT_TOP + 10;
-  const scale = Math.min((W - padding*2) / bldW, (H - padding*2) / bldH);
-  const offX = padding + HW * scale;
-  const offY = H - padding - HW * scale;
+  // Corridors
+  ctx.fillStyle='rgba(96,144,176,0.15)';
+  CORRIDORS.forEach(c=>{
+    const p=ws(c.x, c.y+c.h);
+    ctx.fillRect(p.x, p.y, c.w*s, c.h*s);
+  });
 
-  function tx(x) { return offX + x * scale; }
-  function ty(y) { return offY - y * scale; }
-
-  // Draw corridors
-  ctx.fillStyle = '#1e2535';
-  // Vertical hall
-  ctx.fillRect(tx(-HW), ty(Y_VERT_TOP+2), HW*2*scale, (Y_VERT_TOP+2+HW)*scale);
-  // Horizontal hall
-  ctx.fillRect(tx(-HW), ty(HW), (X_FAR_EAST+HW*2)*scale, HW*2*scale);
-  // Elevator lobby
-  ctx.fillStyle = '#2a2a1a';
-  ctx.fillRect(tx(X_ELEV_W), ty(HW+ELEV_D), (X_ELEV_E-X_ELEV_W)*scale, ELEV_D*scale);
-  // Stairs1
-  ctx.fillStyle = '#2a1a0a';
-  ctx.fillRect(tx(-(HW+S1_W)), ty(Y_STAIR1+S1_D/2), S1_W*scale, S1_D*scale);
-  // Stairs2
-  ctx.fillRect(tx(X_STAIR2), ty(-HW), S2_W*scale, S2_D*scale);
-
-  // Draw walls
-  ctx.strokeStyle = '#4a5568';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  // Vertical hall outline
-  ctx.rect(tx(-HW), ty(Y_VERT_TOP+2), HW*2*scale, (Y_VERT_TOP+2+HW)*scale);
-  ctx.rect(tx(-HW), ty(HW), (X_FAR_EAST+HW*2)*scale, HW*2*scale);
-  ctx.stroke();
-
-  // Draw path
-  if (pathFromExit && pathFromExit.length > 1) {
-    const nodeMap = {};
-    NODES.forEach(n => nodeMap[n.id] = n);
-    ctx.strokeStyle = '#60a5fa';
-    ctx.lineWidth = 4;
-    ctx.setLineDash([8, 4]);
-    ctx.beginPath();
-    for (let i = 0; i < pathFromExit.length; i++) {
-      const n = nodeMap[pathFromExit[i]];
-      if (!n) continue;
-      if (i === 0) ctx.moveTo(tx(n.x), ty(n.y));
-      else ctx.lineTo(tx(n.x), ty(n.y));
-    }
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-  // Draw all nodes
-  const nodeMap = {};
-  NODES.forEach(n => nodeMap[n.id] = n);
-
-  NODES.forEach(n => {
-    let color = '#506070', size = 5;
-    if (n.type === 'exit') { color = '#4ade80'; size = 8; }
-    else if (n.type === 'elevator') { color = '#e8a800'; size = 7; }
-    else if (n.type === 'stairs') { color = '#ff8c2e'; size = 7; }
-    else if (n.type === 'refuge') { color = '#40d465'; size = 6; }
-
-    ctx.beginPath();
-    ctx.arc(tx(n.x), ty(n.y), size, 0, Math.PI*2);
-    ctx.fillStyle = color;
-    ctx.fill();
-
-    if (n.label) {
-      ctx.fillStyle = '#a0aec0';
-      ctx.font = `${Math.max(9, scale*0.8)}px sans-serif`;
-      ctx.fillText(n.label, tx(n.x)+size+2, ty(n.y)+4);
+  // Rooms
+  ZONES.forEach(z=>{
+    const p=ws(z.x, z.y+z.h);
+    ctx.globalAlpha=0.45; ctx.fillStyle=z.color;
+    ctx.fillRect(p.x,p.y,z.w*s,z.h*s);
+    ctx.globalAlpha=0.6; ctx.strokeStyle='rgba(255,255,255,0.15)'; ctx.lineWidth=1;
+    ctx.strokeRect(p.x,p.y,z.w*s,z.h*s); ctx.globalAlpha=1;
+    if(s>3){
+      const cp=ws(z.x+z.w/2, z.y+z.h/2);
+      ctx.fillStyle='rgba(0,0,0,0.8)';
+      ctx.font=`bold ${Math.max(7,Math.min(11,s*1.1))}px sans-serif`;
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      const lines=z.name.split('\n');
+      lines.forEach((l,i)=>ctx.fillText(l,cp.x,cp.y+(i-(lines.length-1)/2)*s*1.4));
     }
   });
 
-  // Draw exit node larger with label
-  if (pathFromExit && pathFromExit.length > 0) {
-    const exitNode = nodeMap[pathFromExit[0]];
-    if (exitNode) {
-      ctx.beginPath();
-      ctx.arc(tx(exitNode.x), ty(exitNode.y), 12, 0, Math.PI*2);
-      ctx.fillStyle = '#4ade80';
-      ctx.fill();
-      ctx.strokeStyle = 'white';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      ctx.fillStyle = 'white';
-      ctx.font = 'bold 11px sans-serif';
-      ctx.fillText('EXIT', tx(exitNode.x)-14, ty(exitNode.y)+4);
+  // Walls
+  ctx.strokeStyle='#c8ccd4'; ctx.lineWidth=Math.max(1.5,s*0.035); ctx.lineCap='round';
+  WALLS.forEach(w=>{
+    const p1=ws(w.x1,w.y1), p2=ws(w.x2,w.y2);
+    ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.stroke();
+  });
+
+  // Path (blue)
+  if(pathToExit&&pathToExit.length>1){
+    const nm={};NODES.forEach(n=>nm[n.id]=n);
+    // Glow
+    ctx.strokeStyle='rgba(50,130,255,0.3)'; ctx.lineWidth=Math.max(10,s*0.12);
+    ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.beginPath();
+    pathToExit.forEach((id,i)=>{const n=nm[id];if(!n)return;const p=ws(n.x,n.y);i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y);});
+    ctx.stroke();
+    // Main line
+    ctx.strokeStyle='#3388ff'; ctx.lineWidth=Math.max(3,s*0.055);
+    ctx.beginPath();
+    pathToExit.forEach((id,i)=>{const n=nm[id];if(!n)return;const p=ws(n.x,n.y);i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y);});
+    ctx.stroke();
+  }
+
+  // Nodes
+  const nm={};NODES.forEach(n=>nm[n.id]=n);
+  const colors={exit:'#E02020',elevator:'#E8A800',stairs:'#D06000',refuge:'#20A840',intersection:'#506070',door:'#707070'};
+  NODES.forEach(n=>{
+    const p=ws(n.x,n.y);
+    const isSmall=n.type==='intersection'||n.type==='door';
+    const r=isSmall?Math.max(2.5,s*0.035):Math.max(5,s*0.065);
+    const isOnPath=pathToExit?.includes(n.id);
+    ctx.beginPath(); ctx.arc(p.x,p.y,r,0,Math.PI*2);
+    ctx.fillStyle=isOnPath?'#5599FF':(colors[n.type]||'#888');
+    ctx.globalAlpha=0.7; ctx.fill(); ctx.globalAlpha=1;
+    if(n.label&&s>6){
+      ctx.fillStyle='#ddd'; ctx.font=`${Math.max(8,s*0.09)}px sans-serif`;
+      ctx.textAlign='center'; ctx.fillText(n.label,p.x,p.y-r-4);
+    }
+  });
+
+  // Exit ring + label
+  if(pathToExit&&pathToExit.length>0){
+    const en=nm[pathToExit[0]];
+    if(en){
+      const p=ws(en.x,en.y);
+      ctx.beginPath(); ctx.arc(p.x,p.y,Math.max(10,s*0.12),0,Math.PI*2);
+      ctx.strokeStyle='#4ade80'; ctx.lineWidth=3; ctx.stroke();
+      ctx.fillStyle='#4ade80'; ctx.font=`bold ${Math.max(10,s*0.14)}px sans-serif`;
+      ctx.textAlign='center'; ctx.fillText('🚪 EXIT',p.x,p.y-Math.max(10,s*0.12)-4);
     }
   }
 
-  // Draw user location (pulsing red dot)
-  const userNode = nodeMap[userNodeId];
-  if (userNode) {
-    // Outer ring
-    ctx.beginPath();
-    ctx.arc(tx(userNode.x), ty(userNode.y), 18, 0, Math.PI*2);
-    ctx.fillStyle = 'rgba(248, 113, 113, 0.25)';
-    ctx.fill();
-    // Inner dot
-    ctx.beginPath();
-    ctx.arc(tx(userNode.x), ty(userNode.y), 10, 0, Math.PI*2);
-    ctx.fillStyle = '#f87171';
-    ctx.fill();
-    ctx.strokeStyle = 'white';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    // Label
-    ctx.fillStyle = 'white';
-    ctx.font = 'bold 11px sans-serif';
-    ctx.fillText('USER', tx(userNode.x)-14, ty(userNode.y)-14);
+  // User dot (red)
+  const un=nm[userNodeId];
+  if(un){
+    const p=ws(un.x,un.y);
+    ctx.beginPath(); ctx.arc(p.x,p.y,Math.max(16,s*0.18),0,Math.PI*2);
+    ctx.fillStyle='rgba(248,113,113,0.25)'; ctx.fill();
+    ctx.beginPath(); ctx.arc(p.x,p.y,Math.max(9,s*0.1),0,Math.PI*2);
+    ctx.fillStyle='#f87171'; ctx.fill(); ctx.strokeStyle='white'; ctx.lineWidth=2; ctx.stroke();
+    ctx.fillStyle='white'; ctx.font=`bold ${Math.max(10,s*0.12)}px sans-serif`;
+    ctx.textAlign='center';
+    ctx.fillText('📍 PERSON HERE',p.x,p.y-Math.max(10,s*0.12)-6);
   }
+
+  // Floor label
+  ctx.fillStyle='rgba(255,255,255,0.4)'; ctx.font='12px sans-serif';
+  ctx.textAlign='left'; ctx.fillText('Ground Floor',10,H-10);
 }
 
 // ============================================================
 // MAIN
 // ============================================================
 async function main() {
-  const params = new URLSearchParams(window.location.search);
-  const alertId = params.get('alert');
-
-  if (!alertId) {
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('error').style.display = 'flex';
-    document.getElementById('error-msg').textContent = 'No alert ID in URL.';
+  const params=new URLSearchParams(window.location.search);
+  const alertId=params.get('alert');
+  if(!alertId){
+    document.getElementById('loading').style.display='none';
+    document.getElementById('error').style.display='flex';
+    document.getElementById('error-msg').textContent='No alert ID in URL.';
     return;
   }
-
-  try {
-    const alertDoc = await getDoc(doc(db, 'rescue_alerts', alertId));
-    if (!alertDoc.exists()) {
-      document.getElementById('loading').style.display = 'none';
-      document.getElementById('error').style.display = 'flex';
+  try{
+    const alertDoc=await getDoc(doc(db,'rescue_alerts',alertId));
+    if(!alertDoc.exists()){
+      document.getElementById('loading').style.display='none';
+      document.getElementById('error').style.display='flex';
       return;
     }
+    const data=alertDoc.data();
+    const userLocation=data.location||'UC_T3';
+    const userName=data.userName||'Unknown User';
+    const timestamp=data.timestamp?.toDate?.()?.toLocaleString()||'Unknown';
+    document.getElementById('user-name').textContent='👤 '+userName;
+    document.getElementById('user-location').textContent=userLocation;
+    document.getElementById('alert-time').textContent=timestamp;
 
-    const data = alertDoc.data();
-    const userLocation = data.location || 'V_00';
-    const userName = data.userName || 'Unknown User';
-    const timestamp = data.timestamp?.toDate?.()?.toLocaleString() || 'Unknown';
-
-    // Update info bar
-    document.getElementById('user-name').textContent = '👤 ' + userName;
-    document.getElementById('user-location').textContent = userLocation;
-    document.getElementById('alert-time').textContent = timestamp;
-
-    // Find path from nearest exit to user
-    const result = findNearestExit(userLocation);
-    const exitNode = result ? NODES.find(n => n.id === result.exitId) : null;
-
-    if (result) {
-      const dist = (result.distance * 4).toFixed(0); // convert to feet
-      document.getElementById('path-info').innerHTML =
-        `<strong>Nearest exit:</strong> ${exitNode?.label || result.exitId} &nbsp;|&nbsp; <strong>Distance:</strong> ~${dist} ft &nbsp;|&nbsp; <strong>Steps:</strong> ${result.path.length - 1}`;
+    const result=findNearestExit(userLocation);
+    const exitNode=result?NODES.find(n=>n.id===result.exitId):null;
+    if(result){
+      const distFt=(result.distance*4).toFixed(0);
+      document.getElementById('path-info').innerHTML=
+        `<strong>Nearest exit:</strong> ${exitNode?.label||result.exitId} &nbsp;|&nbsp; `+
+        `<strong>Distance:</strong> ~${distFt} ft &nbsp;|&nbsp; `+
+        `<strong>Steps:</strong> ${result.path.length-1}`;
     } else {
-      document.getElementById('path-info').textContent = 'Could not calculate path.';
+      document.getElementById('path-info').textContent='Could not calculate path to exit.';
     }
-
-    // Show app
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('app').style.display = 'block';
-
-    // Draw map
-    drawMap(userLocation, result?.path);
-
-    // Redraw on resize
-    window.addEventListener('resize', () => drawMap(userLocation, result?.path));
-
-  } catch (err) {
+    document.getElementById('loading').style.display='none';
+    document.getElementById('app').style.display='block';
+    drawMap(userLocation,result?.path);
+    window.addEventListener('resize',()=>drawMap(userLocation,result?.path));
+  }catch(err){
     console.error(err);
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('error').style.display = 'flex';
-    document.getElementById('error-msg').textContent = 'Error loading alert: ' + err.message;
+    document.getElementById('loading').style.display='none';
+    document.getElementById('error').style.display='flex';
+    document.getElementById('error-msg').textContent='Error: '+err.message;
   }
 }
-
 main();
 </script>
 </body>

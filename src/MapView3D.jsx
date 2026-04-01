@@ -1,442 +1,2058 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { NODES, EDGES, ZONES, CORRIDORS, WALLS, BEACONS, FIRE_ZONES } from './data/buildingData';
+import * as THREE from 'three';
+import { BUILDING, NODES, EDGES, ZONES, CORRIDORS, WALLS, BEACONS, FIRE_ZONES } from './data/buildingData';
 import { dijkstra, findNearestExit } from './pathfinding';
+// Firebase imports (for future Pi camera fire detection)
 import { db } from './firebase';
 import { doc, onSnapshot } from 'firebase/firestore';
 
-// ── BLE ───────────────────────────────────────────────────────
-let NativeBle = null, nativeBleChecked = false;
+// Native BLE (Capacitor) — lazy loaded, falls back to Web Bluetooth
+let NativeBle = null;
+let nativeBleChecked = false;
 async function getNativeBle() {
   if (nativeBleChecked) return NativeBle;
   nativeBleChecked = true;
-  try { const m = await import('@capacitor-community/bluetooth-le'); NativeBle = m.BleClient; } catch (e) {}
+  try {
+    const mod = await import('@capacitor-community/bluetooth-le');
+    NativeBle = mod.BleClient;
+  } catch (e) {}
   return NativeBle;
 }
 
-// ── COLORS ───────────────────────────────────────────────────
-const NC = { exit:'#e02020', elevator:'#e8a800', stairs:'#d06000', refuge:'#20a840', ramp:'#3090d0', intersection:'#4a6070', door:'#606060' };
+// ============================================================
+// NODE COLORS
+// ============================================================
+const NODE_COLORS_HEX = {
+  exit: 0xe02020,
+  elevator: 0xe8a800,
+  stairs: 0xd06000,
+  refuge: 0x20a840,
+  ramp: 0x3090d0,
+  intersection: 0x506070,
+  door: 0x606060,
+};
 
-// ── VOICE ────────────────────────────────────────────────────
-let NativeTTS = null, nativeTTSChecked = false;
+function cssToHex(css) {
+  return parseInt(css.replace('#', ''), 16);
+}
+
+// ============================================================
+// VOICE ENGINE — queued, calm, no overlapping
+// ============================================================
+let NativeTTS = null;
+let nativeTTSChecked = false;
 async function getNativeTTS() {
   if (nativeTTSChecked) return NativeTTS;
   nativeTTSChecked = true;
-  try { const m = await import('@capacitor-community/text-to-speech'); NativeTTS = m.TextToSpeech; } catch (e) {}
+  try {
+    const mod = await import('@capacitor-community/text-to-speech');
+    NativeTTS = mod.TextToSpeech;
+  } catch (e) {}
   return NativeTTS;
 }
 getNativeTTS();
-let isSpeaking = false; const speakQueue = []; let speakTimeout = null;
-function speak(text) { if (speakQueue.length >= 2) speakQueue.shift(); speakQueue.push(text); processQ(); }
-function processQ() {
-  if (isSpeaking || !speakQueue.length) return;
-  isSpeaking = true; const text = speakQueue.shift();
+
+let isSpeaking = false;
+const speakQueue = [];
+let speakTimeout = null;
+
+function speak(text) {
+  // Drop if something is already queued — prevent pile-up
+  if (speakQueue.length >= 2) {
+    speakQueue.shift(); // drop oldest
+  }
+  speakQueue.push(text);
+  processQueue();
+}
+
+function processQueue() {
+  if (isSpeaking || speakQueue.length === 0) return;
+  isSpeaking = true;
+  const text = speakQueue.shift();
+
   if (NativeTTS) {
-    NativeTTS.speak({ text, lang:'en-US', rate:0.85, volume:1.0 })
-      .then(() => { speakTimeout = setTimeout(() => { isSpeaking=false; processQ(); }, 800); })
-      .catch(() => { isSpeaking=false; webSpeak(text); speakTimeout=setTimeout(()=>processQ(),800); });
+    NativeTTS.speak({
+      text,
+      lang: 'en-US',
+      rate: 0.85,
+      volume: 1.0,
+    }).then(() => {
+      // Small pause after speaking before next one
+      speakTimeout = setTimeout(() => {
+        isSpeaking = false;
+        processQueue();
+      }, 800);
+    }).catch(() => {
+      isSpeaking = false;
+      webSpeak(text);
+      speakTimeout = setTimeout(() => processQueue(), 800);
+    });
     return;
   }
-  webSpeak(text); speakTimeout = setTimeout(()=>{ isSpeaking=false; processQ(); }, Math.max(1500,text.length*80)+800);
+  webSpeak(text);
+  // Estimate speech duration (~80ms per character) + pause
+  const duration = Math.max(1500, text.length * 80) + 800;
+  speakTimeout = setTimeout(() => {
+    isSpeaking = false;
+    processQueue();
+  }, duration);
 }
-function stopSpeaking() { speakQueue.length=0; isSpeaking=false; if(speakTimeout){clearTimeout(speakTimeout);speakTimeout=null;} window.speechSynthesis?.cancel(); if(NativeTTS)NativeTTS.stop().catch(()=>{}); }
+
+function stopSpeaking() {
+  speakQueue.length = 0;
+  isSpeaking = false;
+  if (speakTimeout) { clearTimeout(speakTimeout); speakTimeout = null; }
+  window.speechSynthesis?.cancel();
+  if (NativeTTS) NativeTTS.stop().catch(() => {});
+}
+
 function webSpeak(text) {
   if (!('speechSynthesis' in window)) return;
   window.speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text); u.rate=0.95; u.pitch=1.0; u.volume=1.0;
-  const vs = window.speechSynthesis.getVoices();
-  const v = vs.find(v=>v.lang.startsWith('en')&&v.name.includes('Google'))||vs.find(v=>v.lang.startsWith('en'));
-  if(v) u.voice=v; window.speechSynthesis.speak(u);
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 0.95;
+  utterance.pitch = 1.0;
+  utterance.volume = 1.0;
+  const voices = window.speechSynthesis.getVoices();
+  const preferred = voices.find(v => v.lang.startsWith('en') && v.name.includes('Google'));
+  if (preferred) utterance.voice = preferred;
+  else {
+    const english = voices.find(v => v.lang.startsWith('en'));
+    if (english) utterance.voice = english;
+  }
+  window.speechSynthesis.speak(utterance);
 }
 
-// ── VIBRATION ─────────────────────────────────────────────────
-const VIB = { straight:[200], left:[200,350,200], right:[200,350,200,350,200], start:[200,350,200,350,200,350,200], special:[200,350,200,350,200,350,200,350,200], arrive:[800], emergency:[200,80,200,80,200,80,200,80,200,80,500] };
-function vibrate(t) { if('vibrate' in navigator) navigator.vibrate(VIB[t]||VIB.straight); }
-function vibrateEmergency() { if('vibrate' in navigator) navigator.vibrate([200,80,200,80,200,80,200,80,200,300,200,80,200,80,200,80,200,80,200,300,500,200,500]); }
-function stopVibration() { if('vibrate' in navigator) navigator.vibrate(0); }
+// ============================================================
+// VIBRATION ENGINE (for deaf/hearing impaired users)
+// ============================================================
+// Patterns: different NUMBER of buzzes — 350ms pause between each for easy counting
+const VIBRATION_PATTERNS = {
+  straight:  [200],                                        // 1 buzz
+  left:      [200, 350, 200],                              // 2 buzzes
+  right:     [200, 350, 200, 350, 200],                    // 3 buzzes
+  start:     [200, 350, 200, 350, 200, 350, 200],          // 4 buzzes
+  special:   [200, 350, 200, 350, 200, 350, 200, 350, 200], // 5 buzzes (elevator/ramp/stairs)
+  arrive:    [800],                                        // 1 long buzz
+  emergency: [200, 80, 200, 80, 200, 80, 200, 80, 200, 80, 500], // rapid pulses + long
+};
 
-// ── DIRECTIONS ────────────────────────────────────────────────
-function genDirs(path, nodes) {
-  if (!path||path.length<2) return [];
-  const nm={}; nodes.forEach(n=>{nm[n.id]=n;});
-  const dirs=[{text:'Route started. Follow the path.',nodeId:path[0],type:'start'}];
-  let last='start';
-  for (let i=1;i<path.length;i++) {
-    const p=nm[path[i-1]],c=nm[path[i]],nx=i<path.length-1?nm[path[i+1]]:null;
-    if(!p||!c) continue;
-    const dx=c.x-p.x, dy=c.y-p.y, nt=c.type;
-    const sp=nt==='elevator'?'Take the elevator.':nt==='stairs'?'Use the stairwell.':nt==='refuge'?'Proceed to the refuge area.':'';
-    if(i===path.length-1){dirs.push({text:nt==='exit'?"You've reached the exit.":nt==='refuge'?"You've reached the refuge area.":`You have arrived at ${c.label||nt}.`,nodeId:path[i],type:'arrive'});continue;}
-    if(nx){
-      const dx2=nx.x-c.x,dy2=nx.y-c.y,cross=dx*dy2-dy*dx2,dot=dx*dx2+dy*dy2;
-      if(Math.abs(cross)<0.5&&dot>0){if(sp){dirs.push({text:sp,nodeId:path[i],type:'special'});last='special';}else if(last==='left'||last==='right'){dirs.push({text:'Keep going straight.',nodeId:path[i],type:'straight'});last='straight';}}
-      else if(cross>0.5){dirs.push({text:sp||'Turn left.',nodeId:path[i],type:'left'});last='left';}
-      else if(cross<-0.5){dirs.push({text:sp||'Turn right.',nodeId:path[i],type:'right'});last='right';}
-      else if(sp){dirs.push({text:sp,nodeId:path[i],type:'special'});last='special';}
+function vibrate(type) {
+  if (!('vibrate' in navigator)) return;
+  const pattern = VIBRATION_PATTERNS[type] || VIBRATION_PATTERNS.straight;
+  navigator.vibrate(pattern);
+}
+
+function vibrateEmergency() {
+  if (!('vibrate' in navigator)) return;
+  // Strong repeated pattern for emergency — runs 3 times
+  navigator.vibrate([
+    200, 80, 200, 80, 200, 80, 200, 80, 200, 300,
+    200, 80, 200, 80, 200, 80, 200, 80, 200, 300,
+    500, 200, 500,
+  ]);
+}
+
+function stopVibration() {
+  if ('vibrate' in navigator) navigator.vibrate(0);
+}
+
+// ============================================================
+// GENERATE DIRECTIONS (improved for voice)
+// ============================================================
+function generateVoiceDirections(path, nodes) {
+  if (!path || path.length < 2) return [];
+
+  const nodeMap = {};
+  nodes.forEach(n => { nodeMap[n.id] = n; });
+
+  const directions = [];
+
+  // First instruction — no compass, just "route started"
+  directions.push({
+    text: 'Route started. Follow the path.',
+    nodeId: path[0],
+    type: 'start',
+  });
+
+  let lastType = 'start'; // track last direction to avoid repeating "continue straight"
+
+  for (let i = 1; i < path.length; i++) {
+    const prev = nodeMap[path[i - 1]];
+    const curr = nodeMap[path[i]];
+    const next = i < path.length - 1 ? nodeMap[path[i + 1]] : null;
+
+    if (!prev || !curr) continue;
+
+    const dx = curr.x - prev.x;
+    const dy = curr.y - prev.y;
+
+    // Check node type for special instructions
+    const nodeType = curr.type;
+    let specialText = '';
+    if (nodeType === 'elevator') specialText = 'Take the elevator.';
+    else if (nodeType === 'stairs') specialText = 'Use the stairwell.';
+    else if (nodeType === 'ramp') specialText = 'Use the ramp.';
+    else if (nodeType === 'refuge') specialText = 'Proceed to the refuge area. Help is on the way.';
+
+    // Last node = arrival
+    if (i === path.length - 1) {
+      const label = curr.label || curr.type;
+      let arriveText = `You have arrived.`;
+      if (nodeType === 'exit') arriveText = `You've reached the exit.`;
+      if (nodeType === 'refuge') arriveText = `You've reached the refuge area. Help is on the way.`;
+      if (label && nodeType !== 'exit' && nodeType !== 'refuge') arriveText = `You have arrived at ${label}.`;
+      directions.push({
+        text: arriveText,
+        nodeId: path[i],
+        type: 'arrive',
+      });
+      continue;
+    }
+
+    // Determine turn
+    if (next) {
+      const dx2 = next.x - curr.x;
+      const dy2 = next.y - curr.y;
+      const cross = dx * dy2 - dy * dx2;
+      const dot = dx * dx2 + dy * dy2;
+
+      if (Math.abs(cross) < 0.5 && dot > 0) {
+        // Straight — only announce if there's a special landmark or it's been a while
+        if (specialText) {
+          directions.push({ text: specialText, nodeId: path[i], type: 'special' });
+          lastType = 'special';
+        }
+        // Skip "continue straight" unless last direction was a turn (confirms they turned correctly)
+        else if (lastType === 'left' || lastType === 'right') {
+          directions.push({ text: 'Keep going straight.', nodeId: path[i], type: 'straight' });
+          lastType = 'straight';
+        }
+        // Otherwise skip — no need to spam "continue straight" every node
+      } else if (cross > 0.5) {
+        directions.push({
+          text: specialText || 'Turn left.',
+          nodeId: path[i],
+          type: 'left',
+        });
+        lastType = 'left';
+      } else if (cross < -0.5) {
+        directions.push({
+          text: specialText || 'Turn right.',
+          nodeId: path[i],
+          type: 'right',
+        });
+        lastType = 'right';
+      } else {
+        if (specialText) {
+          directions.push({ text: specialText, nodeId: path[i], type: 'special' });
+          lastType = 'special';
+        }
+      }
     }
   }
-  return dirs;
+
+  return directions;
 }
 
-// ═══════════════════════════════════════════════════════════
-// MAIN COMPONENT
-// ═══════════════════════════════════════════════════════════
-export default function MapView3D({ profile, mode='navigate', onLocationUpdate }) {
-  const canvasRef = useRef(null);
-  const containerRef = useRef(null);
-  const viewRef = useRef({ offsetX:30, offsetY:30, scale:1.4 });
-  const [tick, setTick] = useState(0);
-  const redraw = () => setTick(t=>t+1);
+// ============================================================
+// 3D MAP VIEW
+// ============================================================
+export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate }) {
+  const mountRef = useRef(null);
+  const sceneRef = useRef(null);
+  const cameraRef = useRef(null);
+  const rendererRef = useRef(null);
+  const frameRef = useRef(null);
+  const controlsRef = useRef({
+    isDown: false,
+    startX: 0,
+    startY: 0,
+    rotY: Math.PI / 4,
+    rotX: Math.PI / 5,
+    targetRotY: Math.PI / 4,
+    targetRotX: Math.PI / 5,
+    distance: 100,
+    targetDistance: 100,
+    panX: 0,
+    panZ: 0,
+    targetPanX: 0,
+    targetPanZ: 0,
+  });
 
-  const isDrag = useRef(false);
-  const drag0 = useRef({ x:0, y:0, ox:0, oy:0, moved:false });
-
+  // Navigation state
   const [selectedStart, setSelectedStart] = useState(null);
   const [selectedEnd, setSelectedEnd] = useState(null);
   const [currentPath, setCurrentPath] = useState(null);
   const [pathInfo, setPathInfo] = useState(null);
   const [directions, setDirections] = useState([]);
-  const [step, setStep] = useState(0);
-  const [voice, setVoice] = useState(true);
-  const [vib, setVib] = useState(profile?.disabilities?.hearingImpaired||false);
-  const [showNodes, setShowNodes] = useState(true);
-  const [emergency, setEmergency] = useState(false);
-  const [blocked, setBlocked] = useState([]);
-  const [bleOn, setBleOn] = useState(false);
-  const [bleMsg, setBleMsg] = useState('');
-  const [beaconNode, setBeaconNode] = useState(null);
-  const [hovered, setHovered] = useState(null);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [vibrationEnabled, setVibrationEnabled] = useState(true);
   const [showVibGuide, setShowVibGuide] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
-  const wc = profile?.disabilities?.wheelchair||false;
-  const hearing = profile?.disabilities?.hearingImpaired||false;
+  const hearingImpaired = profile?.disabilities?.hearingImpaired || false;
 
+  // Hazard state
+  const [emergencyMode, setEmergencyMode] = useState(false);
+  const [blockedEdges, setBlockedEdges] = useState([]);
+  const [showNodes, setShowNodes] = useState(true);
+  const [bleScanning, setBleScanning] = useState(false);
+  const [currentBeaconNode, setCurrentBeaconNode] = useState(null);
+  const [gpsFollow, setGpsFollow] = useState(true);
+  const gpsFollowRef = useRef(true);
+  const [bleDebug, setBleDebug] = useState('');
+  const [bleDeviceCount, setBleDeviceCount] = useState(0);
+  const [bleLog, setBleLog] = useState([]);
   const beaconRSSI = useRef({});
-  const beaconSmooth = useRef({});
-  const beaconRef = useRef(null);
-  const adCount = useRef(0);
-  const abortRef = useRef(null);
-  const listenerRef = useRef(null);
-  const lastSpeakT = useRef(0);
-  const dotPos = useRef(null);
+  const beaconSmoothed = useRef({});
+  const currentBeaconRef = useRef(null);
+  const adCountRef = useRef(0);
+  const interpolatedPos = useRef({ x: 0, y: 0 });
+  const targetDotPos = useRef({ x: 0, y: 0 });
+  const dotInitialized = useRef(false);
+  const prevPos = useRef({ x: 0, y: 0 });
+  const walkingAngle = useRef(0);
+  const lastSpeakTime = useRef(0);
+  const lastStepSpeakTime = useRef(0);
 
-  // ── FIT ON MOUNT ────────────────────────────────────────
-  useEffect(()=>{
-    const fit=()=>{
-      const c=containerRef.current; if(!c) return;
-      const W=c.clientWidth, H=c.clientHeight;
-      const scale=Math.min((W-40)/200,(H-40)/470);
-      viewRef.current={offsetX:(W-scale*160)/2, offsetY:(H-scale*470)/2+scale*24, scale};
-      redraw();
-    };
-    fit(); window.addEventListener('resize',fit); return()=>window.removeEventListener('resize',fit);
-  },[]);
+  // Keep gpsFollow ref in sync with state
+  useEffect(() => { gpsFollowRef.current = gpsFollow; }, [gpsFollow]);
 
-  // ── COORD HELPERS ──────────────────────────────────────
-  const w2s=(wx,wy)=>{ const{offsetX,offsetY,scale}=viewRef.current; return{x:wx*scale+offsetX,y:wy*scale+offsetY}; };
-  const s2w=(sx,sy)=>{ const{offsetX,offsetY,scale}=viewRef.current; return{x:(sx-offsetX)/scale,y:(sy-offsetY)/scale}; };
+  // Refs for dynamic 3D objects
+  const routeGroupRef = useRef(null);
+  const nodeMeshesRef = useRef([]);
+  const nodeVisualsRef = useRef([]);
+  const startMarkerRef = useRef(null);
+  const endMarkerRef = useRef(null);
+  const blueDotRef = useRef(null);
+  const fireGroupRef = useRef(null);
+  const raycasterRef = useRef(new THREE.Raycaster());
+  const mouseRef = useRef(new THREE.Vector2());
 
-  // ── PATH ───────────────────────────────────────────────
-  useEffect(()=>{
-    if(mode==='view'||!selectedStart){setCurrentPath(null);setPathInfo(null);setDirections([]);setStep(0);return;}
-    if(!selectedEnd) return;
-    const res=dijkstra(selectedStart,selectedEnd,NODES,EDGES,wc,blocked);
-    if(res){
-      setCurrentPath(res.path);
-      const t=NODES.find(n=>n.id===selectedEnd);
-      setPathInfo({distance:res.distance.toFixed(1),destination:t?.label||selectedEnd});
-      const d=genDirs(res.path,NODES); setDirections(d); setStep(0);
-      if(voice&&d.length>0) setTimeout(()=>speak(d[0].text),300);
-      if(vib&&d.length>0) setTimeout(()=>vibrate(d[0].type),300);
-    } else {
-      setCurrentPath(null); setPathInfo({error:wc?'No accessible path.':'No path available.'}); setDirections([]); setStep(0);
-      if(voice) speak('No path available.');
+  const wheelchairMode = profile?.disabilities?.wheelchair || false;
+
+  // ============================================================
+  // COMPUTE PATH
+  // ============================================================
+  useEffect(() => {
+    if (mode === 'view') {
+      setCurrentPath(null);
+      setPathInfo(null);
+      setDirections([]);
+      setCurrentStep(0);
+      return;
     }
-  },[selectedStart,selectedEnd,wc,mode,blocked]);
 
-  // ── BEACON AUTO-ADVANCE ────────────────────────────────
-  useEffect(()=>{
-    if(!beaconNode||!directions.length) return;
-    const now=Date.now(), cool=now-lastSpeakT.current>6000;
-    for(let i=step+1;i<directions.length;i++){
-      if(directions[i].nodeId===beaconNode){
-        setStep(i); const t=directions[i].type;
-        if(cool&&(t==='left'||t==='right'||t==='arrive'||t==='special')){ if(voice)speak(directions[i].text); if(vib)vibrate(t); lastSpeakT.current=now; } break;
+    if (!selectedStart) {
+      setCurrentPath(null);
+      setPathInfo(null);
+      setDirections([]);
+      setCurrentStep(0);
+      return;
+    }
+
+    if (selectedEnd) {
+      const result = dijkstra(selectedStart, selectedEnd, NODES, EDGES, wheelchairMode, blockedEdges);
+      if (result) {
+        setCurrentPath(result.path);
+        const target = NODES.find(n => n.id === selectedEnd);
+        setPathInfo({ distance: result.distance.toFixed(1), destination: target?.label || selectedEnd });
+        const dirs = generateVoiceDirections(result.path, NODES);
+        setDirections(dirs);
+        setCurrentStep(0);
+        // Announce route
+        if (voiceEnabled && dirs.length > 0) {
+          setTimeout(() => speak(dirs[0].text), 300);
+        }
+        if (vibrationEnabled && dirs.length > 0) {
+          setTimeout(() => vibrate(dirs[0].type), 300);
+        }
+      } else {
+        setCurrentPath(null);
+        setPathInfo({ error: wheelchairMode ? 'No accessible path! Route may require stairs.' : 'No path available!' });
+        setDirections([]);
+        setCurrentStep(0);
+        if (voiceEnabled) speak('No path available.');
       }
     }
-  },[beaconNode]);
+  }, [selectedStart, selectedEnd, wheelchairMode, mode]);
 
-  // ── FIREBASE FIRE ──────────────────────────────────────
-  useEffect(()=>{
-    if(!db) return;
-    try{
-      const unsub=onSnapshot(doc(db,'fire_alerts','active'),snap=>{
-        if(!snap.exists()) return;
-        const d=snap.data();
-        if(d.active&&d.zone&&!emergency){ const z=FIRE_ZONES?.[d.zone]; const fb=z?.blockedEdges||[]; setBlocked(fb); setEmergency(true); if(selectedStart){ const r=findNearestExit(selectedStart,NODES,EDGES,wc,fb); if(r){setCurrentPath(r.path);const t=NODES.find(n=>n.id===r.targetId);setPathInfo({distance:r.distance.toFixed(1),destination:t?.label||r.targetId});const dirs=genDirs(r.path,NODES);setDirections(dirs);setStep(0);if(voice)speak('Fire detected! Follow the path to safety.');}}}
-        if(!d.active&&emergency) setEmergency(false);
-      }); return()=>unsub();
-    }catch(e){}
-  },[emergency,selectedStart,voice,wc]);
-
-  // ── DRAW ───────────────────────────────────────────────
-  useEffect(()=>{
-    const canvas=canvasRef.current, cont=containerRef.current;
-    if(!canvas||!cont) return;
-    canvas.width=cont.clientWidth; canvas.height=cont.clientHeight;
-    const ctx=canvas.getContext('2d');
-    const sc=viewRef.current.scale;
-    const S=v=>v*sc;
-
-    // Background
-    ctx.fillStyle='#0e1118'; ctx.fillRect(0,0,canvas.width,canvas.height);
-
-    // Corridors
-    ctx.fillStyle='rgba(220,210,150,0.2)';
-    for(const c of CORRIDORS){ const p=w2s(c.x,c.y); ctx.fillRect(p.x,p.y,S(c.w),S(c.h)); }
-
-    // Rooms
-    for(const z of ZONES){
-      const p=w2s(z.x,z.y);
-      ctx.globalAlpha=0.55; ctx.fillStyle=z.color; ctx.fillRect(p.x,p.y,S(z.w),S(z.h));
-      ctx.globalAlpha=0.6; ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=1; ctx.strokeRect(p.x,p.y,S(z.w),S(z.h));
-      ctx.globalAlpha=1;
-      if(sc>0.55){
-        const cx=w2s(z.x+z.w/2,z.y+z.h/2);
-        ctx.fillStyle='rgba(0,0,0,0.85)'; ctx.font=`bold ${Math.max(6,Math.min(11,S(5.5)))}px sans-serif`;
-        ctx.textAlign='center'; ctx.textBaseline='middle';
-        const words=z.name.split(' ');
-        if(words.length>2&&S(z.w)<65){ const m=Math.ceil(words.length/2); ctx.fillText(words.slice(0,m).join(' '),cx.x,cx.y-S(3)); ctx.fillText(words.slice(m).join(' '),cx.x,cx.y+S(3)); }
-        else ctx.fillText(z.name,cx.x,cx.y);
+  // ============================================================
+  // NEXT STEP (simulate walking)
+  // ============================================================
+  const handleNextStep = () => {
+    if (currentStep < directions.length - 1) {
+      const nextStep = currentStep + 1;
+      setCurrentStep(nextStep);
+      if (voiceEnabled) {
+        speak(directions[nextStep].text);
       }
-    }
-
-    // Walls
-    ctx.strokeStyle='#b0bac8'; ctx.lineWidth=Math.max(1.5,S(0.55)); ctx.lineCap='square';
-    for(const w of WALLS){ const p1=w2s(w.x1,w.y1),p2=w2s(w.x2,w.y2); ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.stroke(); }
-
-    // Edges
-    if(showNodes){
-      for(const e of EDGES){
-        const n1=NODES.find(n=>n.id===e.from),n2=NODES.find(n=>n.id===e.to); if(!n1||!n2) continue;
-        const isBlk=blocked.some(b=>(b.from===e.from&&b.to===e.to)||(b.from===e.to&&b.to===e.from));
-        const p1=w2s(n1.x,n1.y),p2=w2s(n2.x,n2.y);
-        if(isBlk){ctx.strokeStyle='#ff3030';ctx.lineWidth=2;ctx.setLineDash([5,3]);}
-        else if(!e.accessible){ctx.strokeStyle='rgba(200,120,50,0.22)';ctx.lineWidth=1;ctx.setLineDash([4,4]);}
-        else{ctx.strokeStyle='rgba(90,150,210,0.2)';ctx.lineWidth=1;ctx.setLineDash([]);}
-        ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.stroke(); ctx.setLineDash([]);
+      if (vibrationEnabled) {
+        vibrate(directions[nextStep].type);
       }
-    }
-
-    // Route path
-    if(currentPath&&currentPath.length>1){
-      const pts=currentPath.map(id=>{const n=NODES.find(x=>x.id===id);return n?w2s(n.x,n.y):null;}).filter(Boolean);
-      ctx.strokeStyle='rgba(60,150,255,0.22)'; ctx.lineWidth=Math.max(9,S(4.5)); ctx.lineCap='round'; ctx.lineJoin='round';
-      ctx.beginPath(); pts.forEach((p,i)=>i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y)); ctx.stroke();
-      ctx.strokeStyle='#3388ff'; ctx.lineWidth=Math.max(3,S(2));
-      ctx.beginPath(); pts.forEach((p,i)=>i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y)); ctx.stroke();
-    }
-
-    // Fire markers
-    for(const b of blocked){ const n1=NODES.find(n=>n.id===b.from),n2=NODES.find(n=>n.id===b.to); if(!n1||!n2) continue; const m=w2s((n1.x+n2.x)/2,(n1.y+n2.y)/2); ctx.font=`${Math.max(12,S(7))}px sans-serif`; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('🔥',m.x,m.y); }
-
-    // Nodes
-    if(showNodes){
-      for(const node of NODES){
-        const p=w2s(node.x,node.y);
-        const sm=node.type==='intersection'||node.type==='door';
-        const r=sm?Math.max(2,S(1.6)):Math.max(4.5,S(3));
-        const isSt=node.id===selectedStart,isEn=node.id===selectedEnd,isHov=node.id===hovered,isPath=currentPath?.includes(node.id);
-        ctx.beginPath(); ctx.arc(p.x,p.y,r,0,Math.PI*2);
-        if(isSt){ctx.fillStyle='#00e060';ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();}
-        else if(isEn){ctx.fillStyle='#ff4040';ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();}
-        else if(isPath){ctx.fillStyle='#5599ff';ctx.fill();}
-        else{ctx.fillStyle=NC[node.type]||'#888';ctx.globalAlpha=isHov?1:0.75;ctx.fill();ctx.globalAlpha=1;if(isHov){ctx.strokeStyle='#fff';ctx.lineWidth=1.5;ctx.stroke();}}
-        if(node.label&&sc>1.0){ const lp=w2s(node.x,node.y); ctx.fillStyle='#ddd'; ctx.font=`${Math.max(7,S(4))}px sans-serif`; ctx.textAlign='center'; ctx.textBaseline='bottom'; ctx.fillText(node.label,lp.x,lp.y-r-1); }
-      }
-    }
-
-    // YOU / DEST
-    if(selectedStart){ const n=NODES.find(x=>x.id===selectedStart); if(n){const p=w2s(n.x,n.y);ctx.fillStyle='#00e060';ctx.font=`bold ${Math.max(9,S(5))}px sans-serif`;ctx.textAlign='center';ctx.textBaseline='bottom';ctx.fillText('YOU',p.x,p.y-Math.max(5,S(3))-2);}}
-    if(selectedEnd&&!emergency){ const n=NODES.find(x=>x.id===selectedEnd); if(n){const p=w2s(n.x,n.y);ctx.fillStyle='#ff6060';ctx.font=`bold ${Math.max(9,S(5))}px sans-serif`;ctx.textAlign='center';ctx.textBaseline='bottom';ctx.fillText('DEST',p.x,p.y-Math.max(5,S(3))-2);}}
-
-    // Blue dot (BLE)
-    if(dotPos.current){ const dp=w2s(dotPos.current.x,dotPos.current.y); ctx.beginPath();ctx.arc(dp.x,dp.y,Math.max(9,S(5)),0,Math.PI*2);ctx.fillStyle='rgba(50,160,255,0.15)';ctx.fill(); ctx.beginPath();ctx.arc(dp.x,dp.y,Math.max(5,S(2.8)),0,Math.PI*2);ctx.fillStyle='#2288ff';ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke(); }
-
-    // Exit signs
-    for(const node of NODES.filter(n=>n.type==='exit')){ const p=w2s(node.x,node.y); ctx.fillStyle='#00cc44';ctx.font=`bold ${Math.max(8,S(4.5))}px sans-serif`;ctx.textAlign='center';ctx.textBaseline='top';ctx.fillText('🚪EXIT',p.x,p.y+Math.max(4,S(2.5))+1); }
-
-    // Floor label
-    ctx.fillStyle='rgba(255,255,255,0.25)';ctx.font='10px sans-serif';ctx.textAlign='left';ctx.textBaseline='bottom';ctx.fillText('Ground Floor',8,canvas.height-5);
-  },[tick,showNodes,currentPath,selectedStart,selectedEnd,hovered,blocked,emergency,mode]);
-
-  // ── POINTER ───────────────────────────────────────────
-  const hitNode=(sx,sy)=>{ const w=s2w(sx,sy),th=8/viewRef.current.scale; let best=null,bd=Infinity; for(const n of NODES){const d=Math.hypot(n.x-w.x,n.y-w.y);if(d<th&&d<bd){best=n;bd=d;}} return best; };
-
-  const onDown=(e)=>{ const{clientX:x,clientY:y}=e.touches?e.touches[0]:e; isDrag.current=true; drag0.current={x,y,ox:viewRef.current.offsetX,oy:viewRef.current.offsetY,moved:false}; };
-  const onMove=(e)=>{
-    const{clientX:x,clientY:y}=e.touches?e.touches[0]:e;
-    if(isDrag.current){ const dx=x-drag0.current.x,dy=y-drag0.current.y; if(Math.abs(dx)>3||Math.abs(dy)>3) drag0.current.moved=true; viewRef.current.offsetX=drag0.current.ox+dx; viewRef.current.offsetY=drag0.current.oy+dy; redraw(); }
-    else{ const rect=canvasRef.current.getBoundingClientRect(); const n=hitNode(x-rect.left,y-rect.top); setHovered(n?.id||null); }
-  };
-  const onUp=(e)=>{
-    if(!isDrag.current) return; isDrag.current=false;
-    if(!drag0.current.moved&&mode==='navigate'){
-      const{clientX:x,clientY:y}=e.changedTouches?e.changedTouches[0]:e;
-      const rect=canvasRef.current.getBoundingClientRect(); const node=hitNode(x-rect.left,y-rect.top);
-      if(node){
-        if(!selectedStart){setSelectedStart(node.id);if(onLocationUpdate)onLocationUpdate(node.id);if(voice)speak('Starting point set.');}
-        else if(!selectedEnd){if(node.id!==selectedStart)setSelectedEnd(node.id);}
-        else{setSelectedStart(node.id);if(onLocationUpdate)onLocationUpdate(node.id);setSelectedEnd(null);setCurrentPath(null);setPathInfo(null);setDirections([]);setStep(0);if(voice)speak('New starting point set.');}
+      // Move blue dot to the node of this step
+      const nodeId = directions[nextStep].nodeId;
+      if (nodeId && blueDotRef.current) {
+        const node = NODES.find(n => n.id === nodeId);
+        if (node) {
+          blueDotRef.current.position.set(node.x, 0, -node.y);
+        }
       }
     }
   };
-  const onWheel=(e)=>{ e.preventDefault(); const rect=canvasRef.current.getBoundingClientRect(); const mx=e.clientX-rect.left,my=e.clientY-rect.top; const f=e.deltaY<0?1.12:0.88; const ns=Math.max(0.3,Math.min(8,viewRef.current.scale*f)); viewRef.current.offsetX=mx-(mx-viewRef.current.offsetX)*(ns/viewRef.current.scale); viewRef.current.offsetY=my-(my-viewRef.current.offsetY)*(ns/viewRef.current.scale); viewRef.current.scale=ns; redraw(); };
-  const pinch=useRef(null);
-  const onTouchMove=(e)=>{ e.preventDefault(); if(e.touches.length===2){const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);if(pinch.current){const ns=Math.max(0.3,Math.min(8,viewRef.current.scale*(d/pinch.current)));viewRef.current.scale=ns;redraw();}pinch.current=d;}else{pinch.current=null;onMove(e);}};
-  const onTouchEnd=(e)=>{pinch.current=null;onUp(e);};
 
-  // ── STEP CONTROLS ────────────────────────────────────
-  const nextStep=()=>{ if(step<directions.length-1){const n=step+1;setStep(n);if(voice)speak(directions[n].text);if(vib)vibrate(directions[n].type);const nd=NODES.find(x=>x.id===directions[n].nodeId);if(nd){dotPos.current={x:nd.x,y:nd.y};redraw();}}};
-  const prevStep=()=>{ if(step>0){const n=step-1;setStep(n);if(voice)speak(directions[n].text);if(vib)vibrate(directions[n].type);const nd=NODES.find(x=>x.id===directions[n].nodeId);if(nd){dotPos.current={x:nd.x,y:nd.y};redraw();}}};
+  const handlePrevStep = () => {
+    if (currentStep > 0) {
+      const prevStep = currentStep - 1;
+      setCurrentStep(prevStep);
+      if (voiceEnabled) {
+        speak(directions[prevStep].text);
+      }
+      if (vibrationEnabled) {
+        vibrate(directions[prevStep].type);
+      }
+      const nodeId = directions[prevStep].nodeId;
+      if (nodeId && blueDotRef.current) {
+        const node = NODES.find(n => n.id === nodeId);
+        if (node) {
+          blueDotRef.current.position.set(node.x, 0, -node.y);
+        }
+      }
+    }
+  };
 
-  // ── BLE ──────────────────────────────────────────────
-  const BSEGS=[{from:'BEACON_1',to:'BEACON_3',wp:[{x:58,y:5},{x:96,y:5},{x:122,y:28},{x:122,y:90},{x:122,y:159}]},{from:'BEACON_3',to:'BEACON_2',wp:[{x:122,y:159},{x:122,y:220},{x:122,y:266},{x:86,y:266},{x:58,y:266}]}];
-  const BORD=['BEACON_1','BEACON_3','BEACON_2'];
-  const smRSSI=(id,r)=>{ const p=beaconSmooth.current[id]; if(p===undefined){beaconSmooth.current[id]=r;return r;} const a=(Math.abs(r-p)>12||r>-55)?0.4:0.25; beaconSmooth.current[id]=a*r+(1-a)*p; return beaconSmooth.current[id]; };
-  const segPos=(seg,ratio)=>{ const r=Math.max(0,Math.min(1,ratio)),wp=seg.wp; const pos=r*(wp.length-1),idx=Math.min(Math.floor(pos),wp.length-2),frac=pos-idx; return{x:wp[idx].x+(wp[idx+1].x-wp[idx].x)*frac,y:wp[idx].y+(wp[idx+1].y-wp[idx].y)*frac}; };
+  // ============================================================
+  // AUTO-ADVANCE: beacon moves → step advances automatically
+  // ============================================================
+  useEffect(() => {
+    if (!currentBeaconNode || directions.length === 0) return;
 
-  const updateDot=useCallback(()=>{
-    const now=Date.now();
-    const active=BORD.map(id=>{const d=beaconRSSI.current[id];return d&&now-d.timestamp<12000?{id,rssi:beaconSmooth.current[id]||d.rssi,nodeId:d.nodeId}:null;}).filter(Boolean).sort((a,b)=>b.rssi-a.rssi);
-    if(!active.length) return;
-    let pos;
-    if(active.length===1){const n=NODES.find(x=>x.id===active[0].nodeId);if(n)pos={x:n.x,y:n.y};}
-    else{const b1=active[0],b2=active[1];const seg=BSEGS.find(s=>(s.from===b1.id&&s.to===b2.id)||(s.from===b2.id&&s.to===b1.id));if(seg){const fr=seg.from===b1.id?b1:b2,to=seg.from===b1.id?b2:b1;pos=segPos(seg,Math.max(0,Math.min(1,0.5+(to.rssi-fr.rssi)/50)));}else{const n=NODES.find(x=>x.id===b1.nodeId);if(n)pos={x:n.x,y:n.y};}}
-    if(pos){dotPos.current=pos;redraw();const nr=active[0];if(nr.nodeId!==beaconRef.current){beaconRef.current=nr.nodeId;setBeaconNode(nr.nodeId);if(!selectedStart&&onLocationUpdate)onLocationUpdate(nr.nodeId);}}
-  },[selectedStart,onLocationUpdate]);
+    // Check if current beacon matches any direction step AHEAD
+    const now = Date.now();
+    const stepCooldown = now - lastStepSpeakTime.current > 6000;
 
-  const parseBeacon=(bytes,rssi)=>{
-    if(!bytes||bytes.length<22) return;
-    for(let i=0;i<=Math.min(bytes.length-22,10);i++){
-      if(bytes[i]===0x02&&bytes[i+1]===0x15&&i+22<=bytes.length){
-        const major=(bytes[i+18]<<8)|bytes[i+19],minor=(bytes[i+20]<<8)|bytes[i+21];
-        const b=BEACONS.find(b=>b.minor===minor&&b.major===major);
-        if(b){const sm=smRSSI(b.id,rssi);beaconRSSI.current[b.id]={rssi,smoothed:sm,nodeId:b.nodeId,label:b.label,timestamp:Date.now()};setBleMsg(`${b.label}: ${rssi}`);updateDot();}
+    for (let i = currentStep + 1; i < directions.length; i++) {
+      if (directions[i].nodeId === currentBeaconNode) {
+        setCurrentStep(i);
+        // Only speak turns, landmarks, arrival — not straights — and respect cooldown
+        const type = directions[i].type;
+        if (stepCooldown && (type === 'left' || type === 'right' || type === 'arrive' || type === 'special')) {
+          if (voiceEnabled) speak(directions[i].text);
+          if (vibrationEnabled) vibrate(type);
+          lastStepSpeakTime.current = now;
+        }
         break;
       }
     }
+
+    // Also check nodes near the beacon on the path
+    if (currentPath) {
+      const beaconIdx = currentPath.indexOf(currentBeaconNode);
+      if (beaconIdx >= 0) {
+        for (let i = currentStep + 1; i < directions.length; i++) {
+          const dirNodeIdx = currentPath.indexOf(directions[i].nodeId);
+          if (dirNodeIdx >= 0 && dirNodeIdx <= beaconIdx) {
+            setCurrentStep(i);
+            const type = directions[i].type;
+            if (stepCooldown && (type === 'left' || type === 'right' || type === 'arrive' || type === 'special')) {
+              if (voiceEnabled) speak(directions[i].text);
+              if (vibrationEnabled) vibrate(type);
+              lastStepSpeakTime.current = now;
+            }
+            break;
+          }
+        }
+      }
+    }
+  }, [currentBeaconNode]);
+
+  // ============================================================
+  // BUILD 3D SCENE (runs once)
+  // ============================================================
+  useEffect(() => {
+    const mount = mountRef.current;
+    if (!mount) return;
+
+    // --- SCENE ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0c12);
+    scene.fog = new THREE.Fog(0x0a0c12, 150, 350);
+    sceneRef.current = scene;
+
+    // --- CAMERA ---
+    const camera = new THREE.PerspectiveCamera(55, mount.clientWidth / mount.clientHeight, 0.1, 500);
+    cameraRef.current = camera;
+
+    // --- RENDERER ---
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(mount.clientWidth, mount.clientHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    mount.appendChild(renderer.domElement);
+    rendererRef.current = renderer;
+
+    // --- LIGHTING ---
+    const ambient = new THREE.AmbientLight(0x404060, 0.8);
+    scene.add(ambient);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    dirLight.position.set(30, 50, 30);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 2048;
+    dirLight.shadow.mapSize.height = 2048;
+    dirLight.shadow.camera.near = 0.5;
+    dirLight.shadow.camera.far = 150;
+    dirLight.shadow.camera.left = -40;
+    dirLight.shadow.camera.right = 40;
+    dirLight.shadow.camera.top = 30;
+    dirLight.shadow.camera.bottom = -30;
+    scene.add(dirLight);
+
+    const fillLight = new THREE.DirectionalLight(0x8090c0, 0.4);
+    fillLight.position.set(-20, 30, -10);
+    scene.add(fillLight);
+
+    // --- GROUND (dark exterior) ---
+    const groundGeo = new THREE.PlaneGeometry(200, 200);
+    const groundMat = new THREE.MeshStandardMaterial({ color: 0x0e1018, roughness: 0.9 });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.05;
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    // --- BUILDING FLOOR ---
+    const floorGeo = new THREE.PlaneGeometry(BUILDING.width, BUILDING.height);
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x1e2230, roughness: 0.7 });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.set(0, 0, 0);
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    // --- CORRIDORS ---
+    CORRIDORS.forEach(c => {
+      const geo = new THREE.PlaneGeometry(c.w, c.h);
+      const mat = new THREE.MeshStandardMaterial({ color: 0x252a3a, roughness: 0.6 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(c.x + c.w / 2, 0.01, -(c.y + c.h / 2));
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+    });
+
+    // --- ROOMS ---
+    ZONES.forEach(z => {
+      const geo = new THREE.PlaneGeometry(z.w, z.h);
+      const mat = new THREE.MeshStandardMaterial({
+        color: cssToHex(z.color),
+        roughness: 0.5,
+        transparent: true,
+        opacity: 0.5,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(z.x + z.w / 2, 0.02, -(z.y + z.h / 2));
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+
+      // Room label sprite
+      if (z.name) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(0, 0, 256, 64);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 20px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(z.name.replace('\n', ' '), 128, 32);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true, opacity: 0.8 });
+        const sprite = new THREE.Sprite(spriteMat);
+        sprite.position.set(z.x + z.w / 2, 1.5, -(z.y + z.h / 2));
+        sprite.scale.set(z.w * 0.6, z.w * 0.15, 1);
+        scene.add(sprite);
+      }
+    });
+
+    // --- WALLS ---
+    const wallHeight = 3.0;
+    const wallThickness = 0.25;
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0xc0c8d4, roughness: 0.4, metalness: 0.1 });
+
+    WALLS.forEach(w => {
+      const dx = w.x2 - w.x1;
+      const dy = w.y2 - w.y1;
+      const length = Math.sqrt(dx * dx + dy * dy);
+      if (length < 0.01) return;
+
+      const angle = Math.atan2(dy, dx);
+      const midX = (w.x1 + w.x2) / 2;
+      const midY = (w.y1 + w.y2) / 2;
+
+      const geo = new THREE.BoxGeometry(length, wallHeight, wallThickness);
+      const mesh = new THREE.Mesh(geo, wallMat);
+      mesh.position.set(midX, wallHeight / 2, -midY);
+      mesh.rotation.y = -angle;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+    });
+
+    // Wall top edges
+    const edgeMat = new THREE.LineBasicMaterial({ color: 0x8890a0, transparent: true, opacity: 0.5 });
+    WALLS.forEach(w => {
+      const pts = [
+        new THREE.Vector3(w.x1, wallHeight + 0.01, -w.y1),
+        new THREE.Vector3(w.x2, wallHeight + 0.01, -w.y2),
+      ];
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      scene.add(new THREE.Line(geo, edgeMat));
+    });
+
+    // --- EXIT SIGNS ---
+    NODES.filter(n => n.type === 'exit').forEach(exit => {
+      const signGeo = new THREE.BoxGeometry(2.5, 0.8, 0.1);
+      const signMat = new THREE.MeshStandardMaterial({
+        color: 0x00cc40, emissive: 0x00aa30, emissiveIntensity: 0.6, roughness: 0.3,
+      });
+      const sign = new THREE.Mesh(signGeo, signMat);
+      sign.position.set(exit.x, wallHeight - 0.5, -exit.y);
+      scene.add(sign);
+
+      const exitLight = new THREE.PointLight(0x00ff40, 0.5, 8);
+      exitLight.position.set(exit.x, wallHeight, -exit.y);
+      scene.add(exitLight);
+    });
+
+    // --- RESIZE ---
+    const handleResize = () => {
+      if (!mount || !camera || !renderer) return;
+      camera.aspect = mount.clientWidth / mount.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(mount.clientWidth, mount.clientHeight);
+    };
+    window.addEventListener('resize', handleResize);
+
+    // --- ANIMATION LOOP ---
+    const animate = () => {
+      frameRef.current = requestAnimationFrame(animate);
+      const ctrl = controlsRef.current;
+
+      // SPEED-CAPPED DOT MOVEMENT — dot walks, never teleports
+      if (blueDotRef.current && dotInitialized.current) {
+        const target = targetDotPos.current;
+        const dot = blueDotRef.current;
+        const curX = dot.position.x;
+        const curZ = dot.position.z;
+        const tgtX = target.x;
+        const tgtZ = -target.y;
+
+        const dx = tgtX - curX;
+        const dz = tgtZ - curZ;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+
+        // Max speed: 0.35 units per frame — fast enough for large dorm hallways
+        const maxStep = 0.35;
+        let newX, newZ;
+        if (dist < maxStep) {
+          // Close enough — snap to target
+          newX = tgtX;
+          newZ = tgtZ;
+        } else {
+          // Move toward target at walking speed
+          const scale = maxStep / dist;
+          newX = curX + dx * scale;
+          newZ = curZ + dz * scale;
+        }
+
+        dot.position.set(newX, 0, newZ);
+        dot.visible = true;
+
+        // Feed camera with dot position (no angle needed — fixed camera)
+        ctrl.followTarget = { x: newX, z: newZ };
+        ctrl.dotVisible = true;
+        ctrl.gpsFollow = gpsFollowRef.current;
+      }
+
+      if (ctrl.gpsFollow && ctrl.dotVisible) {
+        // FIXED-ANGLE CAMERA — same tilt always, just pans to follow dot
+        const pos = ctrl.followTarget || { x: 0, z: 0 };
+
+        // Fixed camera offset — Tillet building (scaled 1unit=4ft)
+        const camOffsetX = -18;  // offset
+        const camOffsetZ = 42;   // behind
+        const camHeight = 50;    // above
+        const lookOffsetZ = -10; // look ahead
+
+        const targetCamX = pos.x + camOffsetX;
+        const targetCamZ = pos.z + camOffsetZ;
+        const targetLookX = pos.x;
+        const targetLookZ = pos.z + lookOffsetZ;
+
+        // Smooth pan — keeps up with fast dot in large building
+        const lerp = 0.05;
+        camera.position.x += (targetCamX - camera.position.x) * lerp;
+        camera.position.y += (camHeight - camera.position.y) * lerp;
+        camera.position.z += (targetCamZ - camera.position.z) * lerp;
+
+        ctrl._lookX = (ctrl._lookX ?? targetLookX) + (targetLookX - (ctrl._lookX ?? targetLookX)) * lerp;
+        ctrl._lookZ = (ctrl._lookZ ?? targetLookZ) + (targetLookZ - (ctrl._lookZ ?? targetLookZ)) * lerp;
+        camera.lookAt(ctrl._lookX, 0, ctrl._lookZ);
+      } else {
+        // FREE LOOK MODE — original orbit controls
+        ctrl.rotY += (ctrl.targetRotY - ctrl.rotY) * 0.08;
+        ctrl.rotX += (ctrl.targetRotX - ctrl.rotX) * 0.08;
+        ctrl.distance += (ctrl.targetDistance - ctrl.distance) * 0.08;
+        ctrl.panX += (ctrl.targetPanX - ctrl.panX) * 0.08;
+        ctrl.panZ += (ctrl.targetPanZ - ctrl.panZ) * 0.08;
+
+        const cx = ctrl.panX + ctrl.distance * Math.sin(ctrl.rotY) * Math.cos(ctrl.rotX);
+        const cy = ctrl.distance * Math.sin(ctrl.rotX);
+        const cz = ctrl.panZ + ctrl.distance * Math.cos(ctrl.rotY) * Math.cos(ctrl.rotX);
+
+        camera.position.set(cx, cy, cz);
+        camera.lookAt(ctrl.panX, 0, ctrl.panZ);
+      }
+
+      renderer.render(scene, camera);
+    };
+    animate();
+
+    // Preload voices
+    window.speechSynthesis?.getVoices();
+
+    // --- CLEANUP ---
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      if (frameRef.current) cancelAnimationFrame(frameRef.current);
+      if (renderer.domElement && mount.contains(renderer.domElement)) {
+        mount.removeChild(renderer.domElement);
+      }
+      renderer.dispose();
+    };
+  }, []);
+
+  // ============================================================
+  // BLE BEACON SCANNING — ROBUST VERSION WITH DEBUG
+  // ============================================================
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    currentBeaconRef.current = currentBeaconNode;
+  }, [currentBeaconNode]);
+
+  // Helper: add to debug log (keeps last 30 entries)
+  const addLog = useCallback((msg) => {
+    setBleLog(prev => [...prev.slice(-29), { t: Date.now(), msg }]);
+  }, []);
+
+  // Helper: DataView to hex string for debugging
+  const dvToHex = (dv) => {
+    const bytes = [];
+    for (let i = 0; i < Math.min(dv.byteLength, 30); i++) {
+      bytes.push(dv.getUint8(i).toString(16).padStart(2, '0'));
+    }
+    return bytes.join(' ');
   };
 
-  const startScan=useCallback(async()=>{
-    if(bleOn){stopScan();return;}
-    try{
-      setBleMsg('Starting...');
-      const nb=await getNativeBle();
-      if(nb){
-        await nb.initialize({androidNeverForLocation:false}); try{await nb.requestPermissions();}catch(e){}
-        await nb.requestLEScan({allowDuplicates:true,scanMode:2},result=>{
-          adCount.current++;
-          if(result.manufacturerData){for(const[,dv] of Object.entries(result.manufacturerData)){let bytes;try{if(dv instanceof DataView)bytes=new Uint8Array(dv.buffer,dv.byteOffset,dv.byteLength);else if(dv instanceof ArrayBuffer)bytes=new Uint8Array(dv);else if(typeof dv==='string'){const b=atob(dv);bytes=new Uint8Array(b.length).map((_,i)=>b.charCodeAt(i));}else if(dv?.buffer)bytes=new Uint8Array(dv.buffer);}catch(e){continue;}parseBeacon(bytes,result.rssi);}}
-        });
-        setBleOn(true);setBleMsg('Scanning...');speak('Scanning started.');return;
+  // Parse iBeacon data from manufacturer data — tries multiple strategies
+  const parseBeaconFromAd = useCallback((event) => {
+    const mfData = event.manufacturerData;
+    if (!mfData || mfData.size === 0) return null;
+
+    for (const [companyId, dataView] of mfData) {
+      if (!dataView || dataView.byteLength < 4) continue;
+
+      // Strategy 1: Standard iBeacon — look for 0x02 0x15 in first 10 bytes
+      for (let i = 0; i <= Math.min(dataView.byteLength - 22, 10); i++) {
+        try {
+          if (dataView.getUint8(i) === 0x02 && dataView.getUint8(i + 1) === 0x15) {
+            if (i + 22 <= dataView.byteLength) {
+              const major = (dataView.getUint8(i + 18) << 8) | dataView.getUint8(i + 19);
+              const minor = (dataView.getUint8(i + 20) << 8) | dataView.getUint8(i + 21);
+              return { major, minor, rssi: event.rssi, method: 'iBeacon', companyId };
+            }
+          }
+        } catch (e) {}
       }
-      if(!navigator.bluetooth){setBleMsg('Bluetooth unavailable.');return;}
-      if(navigator.bluetooth.requestLEScan){
-        const ac=new AbortController();abortRef.current=ac;
-        await navigator.bluetooth.requestLEScan({acceptAllAdvertisements:true,signal:ac.signal});
-        const listener=(e)=>{ if(!e.manufacturerData) return; for(const[,dv] of e.manufacturerData){const bytes=new Uint8Array(dv.buffer,dv.byteOffset,dv.byteLength);parseBeacon(bytes,e.rssi);}};
-        listenerRef.current=listener; navigator.bluetooth.addEventListener('advertisementreceived',listener);
-        setBleOn(true);setBleMsg('Scanning...');speak('Scanning started.');
-      } else setBleMsg('Enable Web Bluetooth in chrome://flags');
-    }catch(err){setBleMsg('Error: '+(err?.message||err));setBleOn(false);}
-  },[bleOn,updateDot]);
 
-  const stopScan=useCallback(async()=>{
-    try{const nb=await getNativeBle();if(nb)await nb.stopLEScan().catch(()=>{});}catch(e){}
-    if(abortRef.current){abortRef.current.abort();abortRef.current=null;}
-    if(listenerRef.current){navigator.bluetooth?.removeEventListener('advertisementreceived',listenerRef.current);listenerRef.current=null;}
-    beaconRSSI.current={};beaconSmooth.current={};adCount.current=0;dotPos.current=null;
-    setBleOn(false);setBeaconNode(null);setBleMsg('');speak('Scanning stopped.');redraw();
-  },[]);
+      // Strategy 2: Some beacons put major/minor at fixed offsets without 0x02 0x15 prefix
+      if (dataView.byteLength >= 20) {
+        try {
+          // Try reading major at byte 18, minor at byte 20 (raw offset)
+          const major = (dataView.getUint8(18) << 8) | dataView.getUint8(19);
+          const minor = (dataView.getUint8(20) << 8) | dataView.getUint8(21);
+          // Check if this matches any known beacon
+          const match = BEACONS.find(b => b.minor === minor && b.major === major);
+          if (match) {
+            return { major, minor, rssi: event.rssi, method: 'rawOffset', companyId };
+          }
+        } catch (e) {}
+      }
+    }
+    return null;
+  }, []);
 
-  const clearAll=()=>{setBlocked([]);setEmergency(false);setSelectedStart(null);setSelectedEnd(null);setCurrentPath(null);setPathInfo(null);setDirections([]);setStep(0);stopSpeaking();stopVibration();};
+  // RSSI smoothing — responsive for large building with spread-out beacons
+  const smoothRSSI = (beaconId, rawRSSI) => {
+    const prev = beaconSmoothed.current[beaconId];
+    if (prev === undefined) {
+      beaconSmoothed.current[beaconId] = rawRSSI;
+      return rawRSSI;
+    }
 
-  const dir=directions[step];
-  const dIcon=dir?.type==='left'?'⬅️':dir?.type==='right'?'➡️':dir?.type==='arrive'?'🏁':dir?.type==='start'?'📍':dir?.type==='special'?'⚡':'⬆️';
+    // Fast when close to beacon or big change, moderate otherwise
+    const diff = Math.abs(rawRSSI - prev);
+    const isClose = rawRSSI > -55;
+    const alpha = (isClose || diff > 12) ? 0.4 : 0.25;
 
-  const bS=(bg)=>({background:bg,color:'#fff',border:'none',borderRadius:20,padding:'5px 11px',fontSize:'0.72rem',cursor:'pointer'});
-  const pB=(on)=>({background:on?'#1a73e8':'#333',color:'#fff',border:'none',borderRadius:12,padding:'3px 9px',fontSize:'0.7rem',cursor:'pointer'});
-  const sB=(ok)=>({padding:'7px 16px',background:ok?'#2a3a5a':'#1a1d24',border:`1px solid ${ok?'#3b82f6':'#333'}`,color:ok?'#7bb8ff':'#444',borderRadius:8,cursor:ok?'pointer':'default',fontSize:'0.8rem',fontWeight:600});
+    beaconSmoothed.current[beaconId] = alpha * rawRSSI + (1 - alpha) * prev;
+    return beaconSmoothed.current[beaconId];
+  };
 
-  return(
-    <div style={{position:'relative',display:'flex',flexDirection:'column',flex:1,overflow:'hidden'}}>
+  // Tillet Building — 7 beacons, L-shaped layout
+  // Tillet L-shape: Upper U + 214ft corridor + Lower U (1 unit = 4 feet)
+  // B1=UC_T3(16,1.25), B2=UC_L2(27.5,9), B3=CONN_Q2(2,40), B4=LT_MID(14.5,66.5), B5=LL_3(27,78.5), B6=LB_3(15,96.5), B7=LR_3(2,84.5)
+  const BEACON_SEGMENTS = [
+    { from: 'BEACON_2', to: 'BEACON_1', waypoints: [  // Upper left bay → Top center
+      { x: 27.5, y: 9 }, { x: 27.5, y: 5 }, { x: 27.5, y: 1.25 }, { x: 24, y: 1.25 }, { x: 20, y: 1.25 }, { x: 16, y: 1.25 },
+    ]},
+    { from: 'BEACON_1', to: 'BEACON_3', waypoints: [  // Top center → right bay → down 214ft corridor
+      { x: 16, y: 1.25 }, { x: 12, y: 1.25 }, { x: 8, y: 1.25 }, { x: 4, y: 1.25 }, { x: 2, y: 1.25 },
+      { x: 2, y: 5 }, { x: 2, y: 9 }, { x: 2, y: 13 }, { x: 2, y: 21 }, { x: 2, y: 29 }, { x: 2, y: 37 }, { x: 2, y: 40 },
+    ]},
+    { from: 'BEACON_3', to: 'BEACON_4', waypoints: [  // Corridor mid → lower top bar
+      { x: 2, y: 40 }, { x: 2, y: 48 }, { x: 2, y: 56 }, { x: 2, y: 66.5 },
+      { x: 6.5, y: 66.5 }, { x: 10.5, y: 66.5 }, { x: 14.5, y: 66.5 },
+    ]},
+    { from: 'BEACON_4', to: 'BEACON_5', waypoints: [  // Lower top bar → left leg
+      { x: 14.5, y: 66.5 }, { x: 18.5, y: 66.5 }, { x: 22.5, y: 66.5 }, { x: 27, y: 66.5 },
+      { x: 27, y: 70.5 }, { x: 27, y: 74.5 }, { x: 27, y: 78.5 },
+    ]},
+    { from: 'BEACON_5', to: 'BEACON_6', waypoints: [  // Left leg → bottom bar
+      { x: 27, y: 78.5 }, { x: 27, y: 82.5 }, { x: 27, y: 86.5 }, { x: 27, y: 90.5 }, { x: 27, y: 96.5 },
+      { x: 23, y: 96.5 }, { x: 19, y: 96.5 }, { x: 15, y: 96.5 },
+    ]},
+    { from: 'BEACON_6', to: 'BEACON_7', waypoints: [  // Bottom bar → right leg
+      { x: 15, y: 96.5 }, { x: 11, y: 96.5 }, { x: 6.5, y: 96.5 }, { x: 2, y: 96.5 },
+      { x: 2, y: 92.5 }, { x: 2, y: 88.5 }, { x: 2, y: 84.5 },
+    ]},
+    { from: 'BEACON_7', to: 'BEACON_4', waypoints: [  // Right leg → lower top (close lower loop)
+      { x: 2, y: 84.5 }, { x: 2, y: 80.5 }, { x: 2, y: 76.5 }, { x: 2, y: 72.5 },
+      { x: 2, y: 66.5 }, { x: 6.5, y: 66.5 }, { x: 10.5, y: 66.5 }, { x: 14.5, y: 66.5 },
+    ]},
+    { from: 'BEACON_7', to: 'BEACON_3', waypoints: [  // Right leg → corridor (via connection)
+      { x: 2, y: 84.5 }, { x: 2, y: 76.5 }, { x: 2, y: 66.5 }, { x: 2, y: 60 }, { x: 2, y: 52 }, { x: 2, y: 44 }, { x: 2, y: 40 },
+    ]},
+  ];
 
-      {/* NAV BAR */}
-      {mode==='navigate'&&(
-        <div style={{background:'linear-gradient(135deg,#1a73e8,#4fc3f7)',padding:'10px 14px',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0,boxShadow:'0 2px 10px rgba(0,0,0,0.3)'}}>
+  const BEACON_ORDER = ['BEACON_2', 'BEACON_1', 'BEACON_3', 'BEACON_4', 'BEACON_5', 'BEACON_6', 'BEACON_7'];
+
+  // Interpolate position along a segment's waypoints
+  const getSegmentPosition = (segment, ratio) => {
+    const clamped = Math.max(0, Math.min(1, ratio));
+    const wp = segment.waypoints;
+    const totalSegs = wp.length - 1;
+    const pos = clamped * totalSegs;
+    const idx = Math.floor(pos);
+    const frac = pos - idx;
+    const from = wp[Math.min(idx, totalSegs)];
+    const to = wp[Math.min(idx + 1, totalSegs)];
+    return {
+      x: from.x + (to.x - from.x) * frac,
+      y: from.y + (to.y - from.y) * frac,
+    };
+  };
+
+  // Create blue dot (only called once)
+  const createBlueDot = (x, y) => {
+    const scene = sceneRef.current;
+    if (!scene || blueDotRef.current) return;
+    const group = new THREE.Group();
+    const dotGeo = new THREE.SphereGeometry(0.5, 16, 12);
+    const dotMat = new THREE.MeshStandardMaterial({
+      color: 0x2288ff, emissive: 0x2288ff, emissiveIntensity: 0.8, roughness: 0.2,
+    });
+    const dot = new THREE.Mesh(dotGeo, dotMat);
+    dot.position.y = 0.5;
+    group.add(dot);
+    const ringGeo = new THREE.RingGeometry(0.8, 1.5, 32);
+    const ringMat = new THREE.MeshStandardMaterial({
+      color: 0x2288ff, emissive: 0x2288ff, emissiveIntensity: 0.4,
+      transparent: true, opacity: 0.3, side: THREE.DoubleSide,
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.05;
+    group.add(ring);
+    const light = new THREE.PointLight(0x2288ff, 1.0, 6);
+    light.position.y = 1;
+    group.add(light);
+    group.position.set(x, 0, -y);
+    group.visible = true;
+    scene.add(group);
+    blueDotRef.current = group;
+    dotInitialized.current = true;
+    prevPos.current = { x, y };
+  };
+
+  // Determine position from RSSI of up to 4 beacons and slide dot along L-path
+  const updateBeaconPosition = useCallback(() => {
+    const now = Date.now();
+
+    // Gather all active beacons with smoothed RSSI
+    const active = [];
+    for (const bid of BEACON_ORDER) {
+      const data = beaconRSSI.current[bid];
+      if (data && now - data.timestamp < 12000) {
+        active.push({
+          id: bid,
+          rssi: beaconSmoothed.current[bid] || data.rssi,
+          nodeId: data.nodeId,
+          label: data.label,
+          orderIdx: BEACON_ORDER.indexOf(bid),
+        });
+      }
+    }
+
+    if (active.length === 0) return;
+
+    // Sort by signal strength (strongest first)
+    active.sort((a, b) => b.rssi - a.rssi);
+
+    let pos;
+    let nearestNodeId;
+    let nearestLabel;
+
+    if (active.length === 1) {
+      // Only one beacon — place at that beacon's node
+      const b = active[0];
+      const node = NODES.find(n => n.id === b.nodeId);
+      if (node) {
+        pos = { x: node.x, y: node.y };
+        nearestNodeId = b.nodeId;
+        nearestLabel = b.label;
+      }
+    } else {
+      // Find the two strongest beacons
+      const b1 = active[0];
+      const b2 = active[1];
+
+      // Find a segment connecting these two beacons
+      const seg = BEACON_SEGMENTS.find(s =>
+        (s.from === b1.id && s.to === b2.id) || (s.from === b2.id && s.to === b1.id)
+      );
+
+      if (seg) {
+        // Connected beacons — interpolate along segment
+        const fromBeacon = seg.from === b1.id ? b1 : b2;
+        const toBeacon = seg.to === b1.id ? b1 : b2;
+
+        // ratio: 0 = at "from" beacon, 1 = at "to" beacon
+        const diff = toBeacon.rssi - fromBeacon.rssi;
+        const ratio = Math.max(0, Math.min(1, 0.5 + (diff / 50)));
+        pos = getSegmentPosition(seg, ratio);
+
+        // Determine nearest beacon for voice
+        if (ratio < 0.35) {
+          nearestNodeId = fromBeacon.nodeId;
+          nearestLabel = fromBeacon.label;
+        } else if (ratio > 0.65) {
+          nearestNodeId = toBeacon.nodeId;
+          nearestLabel = toBeacon.label;
+        }
+
+        setBleDebug(fromBeacon.label.split('—')[1]?.trim() + ': ' + fromBeacon.rssi.toFixed(0) +
+          ' | ' + toBeacon.label.split('—')[1]?.trim() + ': ' + toBeacon.rssi.toFixed(0) +
+          ' | pos: ' + (ratio * 100).toFixed(0) + '%');
+      } else {
+        // Not adjacent — use strongest beacon position
+        const node = NODES.find(n => n.id === b1.nodeId);
+        if (node) {
+          pos = { x: node.x, y: node.y };
+          nearestNodeId = b1.nodeId;
+          nearestLabel = b1.label;
+        }
+      }
+    }
+
+    if (pos) {
+      targetDotPos.current = pos;
+      interpolatedPos.current = pos;
+      // Don't move dot here — animation loop handles smooth movement
+      // Just ensure dot exists
+      if (!blueDotRef.current) createBlueDot(pos.x, pos.y);
+    }
+
+    // Announce room change (with 5 second cooldown to prevent spam)
+    if (nearestNodeId && nearestNodeId !== currentBeaconRef.current) {
+      currentBeaconRef.current = nearestNodeId;
+      setCurrentBeaconNode(nearestNodeId);
+      // Only set start if no active route
+      if (!currentPath) {
+        setSelectedStart(nearestNodeId);
+        if (onLocationUpdate) onLocationUpdate(nearestNodeId);
+      }
+      const shortLabel = nearestLabel?.split('—')[1]?.trim() || nearestLabel || nearestNodeId;
+      const now = Date.now();
+      // Voice removed — blue dot moving is the feedback
+      addLog('MOVED to ' + shortLabel);
+    }
+  }, [addLog]);
+
+  const bleScanAbortRef = useRef(null);
+  const bleListenerRef = useRef(null);
+
+  const startBLEScan = useCallback(async () => {
+    if (!BEACONS || BEACONS.length === 0) {
+      setBleDebug('No beacons configured.');
+      return;
+    }
+
+    // If already scanning, stop
+    if (bleScanning) {
+      stopBLEScan();
+      return;
+    }
+
+    try {
+      setBleDebug('Starting scan...');
+      addLog('Scan starting...');
+      addLog('Beacons configured: ' + BEACONS.map(b => b.label + ' minor=' + b.minor).join(', '));
+
+      // Try to load Capacitor native BLE
+      const nativeBle = await getNativeBle();
+
+      // =============================================
+      // METHOD 1: Capacitor Native BLE (Android app)
+      // =============================================
+      if (nativeBle) {
+        addLog('Using NATIVE Capacitor BLE ✓');
+        await nativeBle.initialize({ androidNeverForLocation: false });
+
+        // Request permissions explicitly
+        try {
+          await nativeBle.requestPermissions();
+          addLog('Permissions granted ✓');
+        } catch (e) {
+          addLog('Permission request: ' + (e?.message || 'ok'));
+        }
+
+        // Check BT enabled
+        const enabled = await nativeBle.isEnabled();
+        addLog('Bluetooth enabled: ' + enabled);
+
+        await nativeBle.requestLEScan(
+          { allowDuplicates: true, scanMode: 2 },
+          (result) => {
+            adCountRef.current += 1;
+            const count = adCountRef.current;
+            const rssi = result.rssi;
+            const name = result.localName || result.device?.name || result.device?.deviceId?.slice(0, 8) || '??';
+
+            if (count % 10 === 0) setBleDeviceCount(count);
+
+            // Heavy debug for first 30 + every 100th
+            if (count <= 50 || count % 50 === 0) {
+              let logMsg = '#' + count + ' ' + name + ' RSSI=' + rssi;
+
+              // Log result keys for first 5
+              if (count <= 5) {
+                const keys = Object.keys(result || {});
+                logMsg += ' keys=[' + keys.join(',') + ']';
+              }
+
+              // Log manufacturerData format
+              const mfData = result.manufacturerData;
+              if (mfData && typeof mfData === 'object') {
+                const mfKeys = Object.keys(mfData);
+                logMsg += ' mf={' + mfKeys.length + ' keys: ' + mfKeys.slice(0, 3).join(',') + '}';
+                for (const [cid, val] of Object.entries(mfData)) {
+                  if (val instanceof DataView) {
+                    const hex = [];
+                    for (let i = 0; i < Math.min(val.byteLength, 25); i++) hex.push(val.getUint8(i).toString(16).padStart(2, '0'));
+                    logMsg += ' [' + cid + ':DV:' + hex.join(' ') + ']';
+                  } else if (val instanceof ArrayBuffer) {
+                    const arr = new Uint8Array(val);
+                    const hex = Array.from(arr.slice(0, 25)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+                    logMsg += ' [' + cid + ':AB:' + hex + ']';
+                  } else if (typeof val === 'string') {
+                    logMsg += ' [' + cid + ':STR:len=' + val.length + ':' + val.slice(0, 30) + ']';
+                  } else {
+                    logMsg += ' [' + cid + ':type=' + typeof val + ']';
+                  }
+                }
+              } else if (mfData) {
+                logMsg += ' mfData=type:' + typeof mfData;
+              } else {
+                logMsg += ' mfData=null';
+              }
+
+              if (result.rawAdvertisement) {
+                const raw = result.rawAdvertisement;
+                if (raw instanceof DataView) {
+                  const hex = [];
+                  for (let i = 0; i < Math.min(raw.byteLength, 30); i++) hex.push(raw.getUint8(i).toString(16).padStart(2, '0'));
+                  logMsg += ' raw=' + hex.join(' ');
+                }
+              }
+
+              addLog(logMsg);
+            }
+
+            // Parse iBeacon from manufacturerData
+            const mfData = result.manufacturerData;
+            if (mfData && typeof mfData === 'object') {
+              for (const [companyId, dataVal] of Object.entries(mfData)) {
+                let bytes;
+                try {
+                  if (dataVal instanceof DataView) {
+                    bytes = new Uint8Array(dataVal.buffer, dataVal.byteOffset, dataVal.byteLength);
+                  } else if (dataVal instanceof ArrayBuffer) {
+                    bytes = new Uint8Array(dataVal);
+                  } else if (typeof dataVal === 'string') {
+                    const binary = atob(dataVal);
+                    bytes = new Uint8Array(binary.length);
+                    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                  } else if (dataVal?.buffer) {
+                    bytes = new Uint8Array(dataVal.buffer);
+                  }
+                } catch (e) {
+                  if (count <= 5) addLog('Parse err ' + companyId + ': ' + e.message);
+                  continue;
+                }
+
+                if (!bytes || bytes.length < 4) continue;
+
+                for (let i = 0; i <= Math.min(bytes.length - 22, 10); i++) {
+                  if (bytes[i] === 0x02 && bytes[i + 1] === 0x15 && i + 22 <= bytes.length) {
+                    const major = (bytes[i + 18] << 8) | bytes[i + 19];
+                    const minor = (bytes[i + 20] << 8) | bytes[i + 21];
+                    addLog('BEACON FOUND! major=' + major + ' minor=' + minor + ' RSSI=' + rssi);
+                    const beacon = BEACONS.find(b => b.minor === minor && b.major === major);
+                    if (beacon) {
+                      const smoothed = smoothRSSI(beacon.id, rssi);
+                      beaconRSSI.current[beacon.id] = {
+                        rssi, smoothed, nodeId: beacon.nodeId,
+                        label: beacon.label, timestamp: Date.now(),
+                      };
+                      setBleDebug(beacon.label + ': RSSI ' + rssi + ' (avg ' + smoothed.toFixed(0) + ')');
+                      updateBeaconPosition();
+                    }
+                    break;
+                  }
+                }
+              }
+            }
+
+            // Name-based detection
+            if (name && (name.includes('BC') || name.includes('Beacon') || name.includes('KBeacon') || name.includes('Pro'))) {
+              addLog('NAMED: ' + name + ' RSSI=' + rssi);
+            }
+
+            // FALLBACK: Parse rawAdvertisement for iBeacon if manufacturerData didn't find it
+            if (result.rawAdvertisement) {
+              let rawBytes;
+              const raw = result.rawAdvertisement;
+              if (raw instanceof DataView) {
+                rawBytes = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+              } else if (raw instanceof ArrayBuffer) {
+                rawBytes = new Uint8Array(raw);
+              }
+
+              if (rawBytes && rawBytes.length >= 25) {
+                // Search entire raw data for 02 15 (iBeacon marker)
+                for (let i = 0; i <= rawBytes.length - 23; i++) {
+                  if (rawBytes[i] === 0x02 && rawBytes[i + 1] === 0x15 && i + 22 <= rawBytes.length) {
+                    const major = (rawBytes[i + 18] << 8) | rawBytes[i + 19];
+                    const minor = (rawBytes[i + 20] << 8) | rawBytes[i + 21];
+                    const beacon = BEACONS.find(b => b.minor === minor && b.major === major);
+                    if (beacon) {
+                      addLog('RAW BEACON HIT! ' + beacon.label + ' major=' + major + ' minor=' + minor + ' RSSI=' + rssi);
+                      const smoothed = smoothRSSI(beacon.id, rssi);
+                      beaconRSSI.current[beacon.id] = {
+                        rssi, smoothed, nodeId: beacon.nodeId,
+                        label: beacon.label, timestamp: Date.now(),
+                      };
+                      setBleDebug(beacon.label + ': RSSI ' + rssi + ' (avg ' + smoothed.toFixed(0) + ')');
+                      updateBeaconPosition();
+                    }
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        );
+
+
+        setBleScanning(true);
+        setBleDebug('Native scanning active!');
+        speak('Scanning started.');
+        addLog('Native BLE scan running ✓');
+        return;
+      }
+
+      // =============================================
+      // METHOD 2: Web Bluetooth (browser on dad's phone)
+      // =============================================
+      if (!navigator.bluetooth) {
+        setBleDebug('Bluetooth not supported.');
+        return;
+      }
+
+      if (navigator.bluetooth.requestLEScan) {
+        addLog('Using Web Bluetooth requestLEScan');
+
+        const abortController = new AbortController();
+        bleScanAbortRef.current = abortController;
+
+        await navigator.bluetooth.requestLEScan({
+          acceptAllAdvertisements: true,
+          signal: abortController.signal,
+        });
+
+        addLog('Scan started! Listening for advertisements...');
+
+        const listener = (event) => {
+          adCountRef.current += 1;
+          const count = adCountRef.current;
+          const name = event.device?.name || event.device?.id?.slice(0, 8) || '??';
+          const rssi = event.rssi;
+          const mfSize = event.manufacturerData?.size || 0;
+
+          if (count <= 20 || count % 50 === 0) {
+            let logMsg = '#' + count + ' ' + name + ' RSSI=' + rssi + ' mfData=' + mfSize;
+            if (event.manufacturerData) {
+              for (const [cid, dv] of event.manufacturerData) {
+                logMsg += ' [0x' + cid.toString(16) + ': ' + dvToHex(dv) + ']';
+              }
+            }
+            addLog(logMsg);
+          }
+
+          if (count % 10 === 0) setBleDeviceCount(count);
+
+          const parsed = parseBeaconFromAd(event);
+          if (parsed) {
+            const beacon = BEACONS.find(b => b.minor === parsed.minor && b.major === parsed.major);
+            if (beacon) {
+              const smoothed = smoothRSSI(beacon.id, parsed.rssi);
+              beaconRSSI.current[beacon.id] = {
+                rssi: parsed.rssi, smoothed,
+                nodeId: beacon.nodeId, label: beacon.label, timestamp: Date.now(),
+              };
+              setBleDebug(beacon.label + ': RSSI ' + parsed.rssi + ' (avg ' + smoothed.toFixed(0) + ') via ' + parsed.method);
+              updateBeaconPosition();
+            }
+          }
+
+          if (!parsed && name && (name.includes('BC') || name.includes('Beacon') || name.includes('Blue') || name.includes('KBeacon'))) {
+            addLog('Known device: ' + name + ' RSSI=' + rssi + ' (no iBeacon data)');
+          }
+        };
+
+        bleListenerRef.current = listener;
+        navigator.bluetooth.addEventListener('advertisementreceived', listener);
+
+        setBleScanning(true);
+        setBleDebug('Scanning... walk around');
+        speak('Scanning started.');
+
+      } else {
+        addLog('requestLEScan NOT available');
+        setBleDebug('Enable "Experimental Web Platform features" in chrome://flags');
+      }
+
+    } catch (err) {
+      const msg = err?.message || String(err);
+      addLog('SCAN ERROR: ' + msg);
+      setBleDebug('Error: ' + msg);
+      speak('Scan failed. Make sure Bluetooth and Location are on.');
+      setBleScanning(false);
+    }
+  }, [bleScanning, updateBeaconPosition, parseBeaconFromAd, addLog]);
+
+  const stopBLEScan = useCallback(async () => {
+    try {
+      // Stop native Capacitor scan
+      const nativeBle = await getNativeBle();
+      if (nativeBle) {
+        try { await nativeBle.stopLEScan(); } catch (e) {}
+      }
+      // Stop Web Bluetooth scan
+      if (bleScanAbortRef.current) {
+        bleScanAbortRef.current.abort();
+        bleScanAbortRef.current = null;
+      }
+      if (bleListenerRef.current) {
+        navigator.bluetooth?.removeEventListener('advertisementreceived', bleListenerRef.current);
+        bleListenerRef.current = null;
+      }
+      beaconRSSI.current = {};
+      beaconSmoothed.current = {};
+      adCountRef.current = 0;
+      setBleScanning(false);
+      setCurrentBeaconNode(null);
+      setBleDebug('');
+      setBleLog([]);
+      speak('Scanning stopped.');
+    } catch (e) {
+      setBleScanning(false);
+    }
+  }, []);
+
+  // GPS follow is handled in the animation loop via controlsRef.current.gpsFollow
+
+  // ============================================================
+  // UPDATE NODES
+  // ============================================================
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    // Remove old
+    nodeMeshesRef.current.forEach(m => scene.remove(m));
+    nodeVisualsRef.current.forEach(m => scene.remove(m));
+    nodeMeshesRef.current = [];
+    nodeVisualsRef.current = [];
+
+    if (!showNodes) return;
+
+    NODES.forEach(node => {
+      const isSmall = node.type === 'intersection' || node.type === 'door';
+      const visualRadius = isSmall ? 0.3 : 0.5;
+      const color = NODE_COLORS_HEX[node.type] || 0x888888;
+
+      // Visible sphere
+      const geo = new THREE.SphereGeometry(visualRadius, 12, 8);
+      const mat = new THREE.MeshStandardMaterial({
+        color, emissive: color, emissiveIntensity: 0.3, roughness: 0.4,
+      });
+      const visual = new THREE.Mesh(geo, mat);
+      visual.position.set(node.x, 0.4, -node.y);
+      scene.add(visual);
+      nodeVisualsRef.current.push(visual);
+
+      // Invisible hit sphere (bigger, easier to click)
+      const hitGeo = new THREE.SphereGeometry(1.2, 8, 6);
+      const hitMat = new THREE.MeshBasicMaterial({ visible: false });
+      const hitMesh = new THREE.Mesh(hitGeo, hitMat);
+      hitMesh.position.set(node.x, 0.4, -node.y);
+      hitMesh.userData = { nodeId: node.id };
+      scene.add(hitMesh);
+      nodeMeshesRef.current.push(hitMesh);
+    });
+  }, [showNodes]);
+
+  // ============================================================
+  // UPDATE ROUTE PATH (FIXED)
+  // ============================================================
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    // Remove old route group
+    if (routeGroupRef.current) {
+      scene.remove(routeGroupRef.current);
+      routeGroupRef.current.traverse(child => {
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) child.material.dispose();
+      });
+      routeGroupRef.current = null;
+    }
+
+    if (!currentPath || currentPath.length < 2) return;
+
+    const nodeMap = {};
+    NODES.forEach(n => { nodeMap[n.id] = n; });
+
+    const points = currentPath.map(id => {
+      const n = nodeMap[id];
+      return new THREE.Vector3(n.x, 0.15, -n.y);
+    });
+
+    const routeGroup = new THREE.Group();
+
+    const curve = new THREE.CatmullRomCurve3(points, false, 'catmullrom', 0.2);
+
+    // Main tube
+    const tubeGeo = new THREE.TubeGeometry(curve, points.length * 8, 0.25, 8, false);
+    const tubeMat = new THREE.MeshStandardMaterial({
+      color: 0x3388ff, emissive: 0x2266cc, emissiveIntensity: 0.6,
+      roughness: 0.3, transparent: true, opacity: 0.85,
+    });
+    routeGroup.add(new THREE.Mesh(tubeGeo, tubeMat));
+
+    // Glow tube
+    const glowGeo = new THREE.TubeGeometry(curve, points.length * 8, 0.6, 8, false);
+    const glowMat = new THREE.MeshStandardMaterial({
+      color: 0x3388ff, emissive: 0x3388ff, emissiveIntensity: 1.0,
+      transparent: true, opacity: 0.15,
+    });
+    routeGroup.add(new THREE.Mesh(glowGeo, glowMat));
+
+    // Route light
+    const midIdx = Math.floor(points.length / 2);
+    const routeLight = new THREE.PointLight(0x3388ff, 0.5, 15);
+    routeLight.position.copy(points[midIdx]).setY(1);
+    routeGroup.add(routeLight);
+
+    scene.add(routeGroup);
+    routeGroupRef.current = routeGroup;
+
+  }, [currentPath]);
+
+  // ============================================================
+  // UPDATE START/END MARKERS
+  // ============================================================
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    // Cleanup old markers (skip blueDot when scanning — beacon effect handles it)
+    [startMarkerRef, endMarkerRef].forEach(ref => {
+      if (ref.current) {
+        scene.remove(ref.current);
+        ref.current = null;
+      }
+    });
+    if (!bleScanning && blueDotRef.current) {
+      scene.remove(blueDotRef.current);
+      blueDotRef.current = null;
+    }
+
+    // Blue dot at start (only when NOT scanning — scanning has its own dot)
+    if (selectedStart && !bleScanning) {
+      const node = NODES.find(n => n.id === selectedStart);
+      if (node) {
+        const group = new THREE.Group();
+
+        // Inner sphere
+        const dotGeo = new THREE.SphereGeometry(0.5, 16, 12);
+        const dotMat = new THREE.MeshStandardMaterial({
+          color: 0x2288ff, emissive: 0x2288ff, emissiveIntensity: 0.8, roughness: 0.2,
+        });
+        const dot = new THREE.Mesh(dotGeo, dotMat);
+        dot.position.y = 0.5;
+        group.add(dot);
+
+        // Glow ring on floor
+        const ringGeo = new THREE.RingGeometry(0.8, 1.5, 32);
+        const ringMat = new THREE.MeshStandardMaterial({
+          color: 0x2288ff, emissive: 0x2288ff, emissiveIntensity: 0.4,
+          transparent: true, opacity: 0.3, side: THREE.DoubleSide,
+        });
+        const ring = new THREE.Mesh(ringGeo, ringMat);
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.y = 0.05;
+        group.add(ring);
+
+        // Point light
+        const light = new THREE.PointLight(0x2288ff, 1.0, 6);
+        light.position.y = 1;
+        group.add(light);
+
+        group.position.set(node.x, 0, -node.y);
+        scene.add(group);
+        blueDotRef.current = group;
+      }
+    }
+
+    // Red pin at end
+    if (selectedEnd && !emergencyMode) {
+      const node = NODES.find(n => n.id === selectedEnd);
+      if (node) {
+        const group = new THREE.Group();
+
+        const pinGeo = new THREE.ConeGeometry(0.4, 1.5, 8);
+        const pinMat = new THREE.MeshStandardMaterial({
+          color: 0xff3344, emissive: 0xff2233, emissiveIntensity: 0.5,
+        });
+        const pin = new THREE.Mesh(pinGeo, pinMat);
+        pin.position.y = 2;
+        group.add(pin);
+
+        const baseGeo = new THREE.SphereGeometry(0.3, 8, 6);
+        const baseMat = new THREE.MeshStandardMaterial({
+          color: 0xff3344, emissive: 0xff2233, emissiveIntensity: 0.5,
+        });
+        const base = new THREE.Mesh(baseGeo, baseMat);
+        base.position.y = 1.2;
+        group.add(base);
+
+        // Red light
+        const light = new THREE.PointLight(0xff3344, 0.5, 5);
+        light.position.y = 2;
+        group.add(light);
+
+        group.position.set(node.x, 0, -node.y);
+        scene.add(group);
+        endMarkerRef.current = group;
+      }
+    }
+  }, [selectedStart, selectedEnd, emergencyMode, bleScanning]);
+
+  // ============================================================
+  // UPDATE FIRE MARKERS
+  // ============================================================
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    if (fireGroupRef.current) {
+      scene.remove(fireGroupRef.current);
+      fireGroupRef.current = null;
+    }
+
+    if (blockedEdges.length === 0) return;
+
+    const fireGroup = new THREE.Group();
+
+    blockedEdges.forEach(b => {
+      const n1 = NODES.find(n => n.id === b.from);
+      const n2 = NODES.find(n => n.id === b.to);
+      if (!n1 || !n2) return;
+
+      const midX = (n1.x + n2.x) / 2;
+      const midY = (n1.y + n2.y) / 2;
+
+      // Fire glow
+      const fireLight = new THREE.PointLight(0xff4400, 2, 10);
+      fireLight.position.set(midX, 2, -midY);
+      fireGroup.add(fireLight);
+
+      // Fire sphere
+      const geo = new THREE.SphereGeometry(0.6, 8, 6);
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0xff4400, emissive: 0xff2200, emissiveIntensity: 1.5,
+        transparent: true, opacity: 0.8,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(midX, 1.5, -midY);
+      fireGroup.add(mesh);
+
+      // Blocked barrier
+      const dx = n2.x - n1.x;
+      const dy = n2.y - n1.y;
+      const length = Math.sqrt(dx * dx + dy * dy);
+      const angle = Math.atan2(dy, dx);
+
+      const barrierGeo = new THREE.BoxGeometry(length, 0.3, 0.1);
+      const barrierMat = new THREE.MeshStandardMaterial({
+        color: 0xff0000, emissive: 0xff0000, emissiveIntensity: 0.5,
+        transparent: true, opacity: 0.6,
+      });
+      const barrier = new THREE.Mesh(barrierGeo, barrierMat);
+      barrier.position.set(midX, 0.15, -midY);
+      barrier.rotation.y = -angle;
+      fireGroup.add(barrier);
+    });
+
+    scene.add(fireGroup);
+    fireGroupRef.current = fireGroup;
+  }, [blockedEdges]);
+
+  // ============================================================
+  // FIREBASE FIRE DETECTION — listens for camera alerts
+  // ============================================================
+  useEffect(() => {
+    if (!db) return;
+    try {
+      const alertRef = doc(db, 'fire_alerts', 'active');
+      const unsubscribe = onSnapshot(alertRef, (snapshot) => {
+        if (!snapshot.exists()) return;
+        const data = snapshot.data();
+        if (data.active && data.zone && !emergencyMode) {
+          // Fire detected by camera! Block the fire zone and auto-evacuate
+          const zone = FIRE_ZONES?.[data.zone];
+          const fireBlocked = zone?.blockedEdges || [];
+          setBlockedEdges(fireBlocked);
+          setEmergencyMode(true);
+          if (selectedStart) {
+            const result = findNearestExit(selectedStart, NODES, EDGES, wheelchairMode, fireBlocked);
+            if (result) {
+              setCurrentPath(result.path);
+              const target = NODES.find(n => n.id === result.targetId);
+              setPathInfo({ distance: result.distance.toFixed(1), destination: target?.label || result.targetId });
+              const dirs = generateVoiceDirections(result.path, NODES);
+              setDirections(dirs);
+              setCurrentStep(0);
+              if (voiceEnabled) speak('Fire detected near ' + (zone?.label || data.zone) + '. Follow the blue path to safety.');
+              if (vibrationEnabled) vibrateEmergency();
+            }
+          }
+        }
+        if (data.active === false && emergencyMode) {
+          // Fire cleared
+          setEmergencyMode(false);
+        }
+      });
+      return () => unsubscribe();
+    } catch (e) {
+      // Firebase not available
+    }
+  }, [emergencyMode, selectedStart, voiceEnabled, vibrationEnabled, wheelchairMode, blockedEdges]);
+
+  // ============================================================
+  // MOUSE / TOUCH CONTROLS
+  // ============================================================
+  const handleMouseDown = (e) => {
+    controlsRef.current.isDown = true;
+    controlsRef.current.startX = e.clientX;
+    controlsRef.current.startY = e.clientY;
+    controlsRef.current.moved = false;
+  };
+
+  const handleMouseMove = (e) => {
+    const ctrl = controlsRef.current;
+    if (!ctrl.isDown) return;
+
+    const dx = e.clientX - ctrl.startX;
+    const dy = e.clientY - ctrl.startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      ctrl.moved = true;
+      if (gpsFollow) setGpsFollow(false);
+    }
+
+    ctrl.targetRotY -= dx * 0.005;
+    ctrl.targetRotX = Math.max(0.1, Math.min(Math.PI / 2.2, ctrl.targetRotX + dy * 0.005));
+    ctrl.startX = e.clientX;
+    ctrl.startY = e.clientY;
+  };
+
+  const handleMouseUp = (e) => {
+    const ctrl = controlsRef.current;
+    ctrl.isDown = false;
+    if (!ctrl.moved && mode === 'navigate') {
+      handleNodeClick(e);
+    }
+  };
+
+  const handleWheel = (e) => {
+    e.preventDefault();
+    controlsRef.current.targetDistance = Math.max(15, Math.min(120,
+      controlsRef.current.targetDistance + e.deltaY * 0.05
+    ));
+  };
+
+  const handleNodeClick = (e) => {
+    const mount = mountRef.current;
+    const camera = cameraRef.current;
+    if (!mount || !camera) return;
+
+    const rect = mount.getBoundingClientRect();
+    mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+    raycasterRef.current.setFromCamera(mouseRef.current, camera);
+    const intersects = raycasterRef.current.intersectObjects(nodeMeshesRef.current);
+
+    if (intersects.length > 0) {
+      const nodeId = intersects[0].object.userData.nodeId;
+      if (!nodeId) return;
+
+      if (!selectedStart) {
+        setSelectedStart(nodeId);
+        if (onLocationUpdate) onLocationUpdate(nodeId);
+        if (voiceEnabled) speak('Starting point set.');
+      } else if (!selectedEnd) {
+        if (nodeId !== selectedStart) {
+          setSelectedEnd(nodeId);
+        }
+      } else {
+        setSelectedStart(nodeId);
+        if (onLocationUpdate) onLocationUpdate(nodeId);
+        setSelectedEnd(null);
+        setCurrentPath(null);
+        setPathInfo(null);
+        setDirections([]);
+        setCurrentStep(0);
+        if (voiceEnabled) speak('New starting point set.');
+      }
+    }
+  };
+
+  // Touch handlers
+  const touchRef = useRef({ startX: 0, startY: 0, time: 0, pinchDist: null });
+
+  const handleTouchStart = (e) => {
+    if (e.touches.length === 1) {
+      const t = e.touches[0];
+      controlsRef.current.isDown = true;
+      controlsRef.current.startX = t.clientX;
+      controlsRef.current.startY = t.clientY;
+      controlsRef.current.moved = false;
+      touchRef.current = { startX: t.clientX, startY: t.clientY, time: Date.now(), pinchDist: null };
+    }
+  };
+
+  const handleTouchMove = (e) => {
+    e.preventDefault();
+    if (e.touches.length === 1) {
+      const t = e.touches[0];
+      const ctrl = controlsRef.current;
+      const dx = t.clientX - ctrl.startX;
+      const dy = t.clientY - ctrl.startY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        ctrl.moved = true;
+        if (gpsFollow) setGpsFollow(false);
+      }
+      ctrl.targetRotY -= dx * 0.005;
+      ctrl.targetRotX = Math.max(0.1, Math.min(Math.PI / 2.2, ctrl.targetRotX + dy * 0.005));
+      ctrl.startX = t.clientX;
+      ctrl.startY = t.clientY;
+    }
+    if (e.touches.length === 2) {
+      const d = Math.sqrt(
+        (e.touches[0].clientX - e.touches[1].clientX) ** 2 +
+        (e.touches[0].clientY - e.touches[1].clientY) ** 2
+      );
+      if (touchRef.current.pinchDist) {
+        const delta = touchRef.current.pinchDist - d;
+        controlsRef.current.targetDistance = Math.max(15, Math.min(120,
+          controlsRef.current.targetDistance + delta * 0.1
+        ));
+      }
+      touchRef.current.pinchDist = d;
+    }
+  };
+
+  const handleTouchEnd = () => {
+    const ctrl = controlsRef.current;
+    ctrl.isDown = false;
+    touchRef.current.pinchDist = null;
+    if (!ctrl.moved && mode === 'navigate') {
+      const t = touchRef.current;
+      if (Date.now() - t.time < 300) {
+        handleNodeClick({ clientX: t.startX, clientY: t.startY });
+      }
+    }
+  };
+
+  // Fire detection will be handled by Pi camera in the future
+  // For now, fire can only be triggered manually via clearAll reset
+
+  // ============================================================
+  // ACTIONS
+  // ============================================================
+
+  const clearAll = () => {
+    setBlockedEdges([]);
+    setEmergencyMode(false);
+    setSelectedStart(null);
+    setSelectedEnd(null);
+    setCurrentPath(null);
+    setPathInfo(null);
+    setDirections([]);
+    setCurrentStep(0);
+    window.speechSynthesis?.cancel();
+    if (NativeTTS) NativeTTS.stop().catch(() => {});
+    stopVibration();
+  };
+
+  // ============================================================
+  // RENDER
+  // ============================================================
+  const currentDir = directions[currentStep];
+  const dirIcon = currentDir?.type === 'left' ? '⬅️'
+    : currentDir?.type === 'right' ? '➡️'
+    : currentDir?.type === 'arrive' ? '🏁'
+    : currentDir?.type === 'start' ? '📍'
+    : currentDir?.type === 'special' ? '⚡'
+    : '⬆️';
+
+  return (
+    <div className="map-wrapper">
+      {/* CLEAN NAVIGATION BAR */}
+      {mode === 'navigate' && (
+        <div style={{
+          position:'absolute', top:0, left:0, right:0, zIndex:100,
+          background: 'linear-gradient(135deg, #1a73e8, #4fc3f7)',
+          padding: '12px 16px', display:'flex', alignItems:'center', justifyContent:'space-between',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.3)',
+        }}>
           <div style={{flex:1}}>
-            {dir?(<div style={{display:'flex',alignItems:'center',gap:8}}><span style={{fontSize:'1.4rem'}}>{dIcon}</span><div><div style={{color:'#fff',fontWeight:'bold',fontSize:'0.88rem'}}>{dir.text}</div>{pathInfo&&<div style={{color:'rgba(255,255,255,0.7)',fontSize:'0.68rem'}}>→ {pathInfo.destination} • {pathInfo.distance}m</div>}</div></div>)
-            :(<div style={{color:'rgba(255,255,255,0.85)',fontSize:'0.8rem'}}>{bleOn?(beaconNode?'Tap destination':'📡 Scanning...'):'Tap a node to set your location'}</div>)}
+            {directions.length > 0 && currentDir ? (
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <span style={{fontSize:'1.6rem'}}>{dirIcon}</span>
+                <div>
+                  <div style={{color:'#fff',fontWeight:'bold',fontSize:'0.95rem'}}>{currentDir.text}</div>
+                  {pathInfo && <div style={{color:'rgba(255,255,255,0.7)',fontSize:'0.7rem'}}>→ {pathInfo.destination} • {pathInfo.distance}m</div>}
+                </div>
+              </div>
+            ) : (
+              <div style={{color:'rgba(255,255,255,0.8)',fontSize:'0.85rem'}}>
+                {bleScanning
+                  ? (currentBeaconNode ? 'Tap a destination' : 'Scanning for beacons...')
+                  : 'Tap a node to start'}
+              </div>
+            )}
           </div>
           <div style={{display:'flex',gap:6}}>
-            {!bleOn?<button onClick={startScan} style={bS('rgba(255,255,255,0.2)')}>📡 Scan</button>:<button onClick={stopScan} style={bS('rgba(255,255,255,0.3)')}>■ Stop</button>}
-            <button onClick={()=>{if(!selectedStart)return;const r=findNearestExit(selectedStart,NODES,EDGES,wc,blocked);if(r){setCurrentPath(r.path);const t=NODES.find(n=>n.id===r.targetId);setPathInfo({distance:r.distance.toFixed(1),destination:t?.label||r.targetId});const d=genDirs(r.path,NODES);setDirections(d);setStep(0);if(voice)speak('Evacuating. Follow the blue path.');}}} style={bS('rgba(200,40,40,0.85)')}>🚨 Exit</button>
-            <button onClick={clearAll} style={bS('rgba(255,255,255,0.15)')}>↺</button>
+            {!bleScanning && (
+              <button onClick={startBLEScan} style={{background:'rgba(255,255,255,0.2)',color:'#fff',border:'none',borderRadius:20,padding:'6px 12px',fontSize:'0.75rem'}}>
+                📡 Scan
+              </button>
+            )}
+            {bleScanning && (
+              <button onClick={stopBLEScan} style={{background:'rgba(255,255,255,0.3)',color:'#fff',border:'none',borderRadius:20,padding:'6px 12px',fontSize:'0.75rem'}}>
+                ■ Stop
+              </button>
+            )}
+            <button onClick={() => {
+              if (!selectedStart) return;
+              const result = findNearestExit(selectedStart, NODES, EDGES, wheelchairMode, blockedEdges);
+              if (result) {
+                setCurrentPath(result.path);
+                const target = NODES.find(n => n.id === result.targetId);
+                setPathInfo({ distance: result.distance.toFixed(1), destination: target?.label || result.targetId });
+                const dirs = generateVoiceDirections(result.path, NODES);
+                setDirections(dirs);
+                setCurrentStep(0);
+                if (voiceEnabled) speak('Evacuating. Follow the blue path.');
+                if (vibrationEnabled) vibrateEmergency();
+              }
+            }} style={{background:'rgba(255,80,80,0.85)',color:'#fff',border:'none',borderRadius:20,padding:'6px 12px',fontSize:'0.75rem'}}>
+              🚨 Evacuate
+            </button>
+            <button onClick={clearAll} style={{background:'rgba(255,255,255,0.15)',color:'#fff',border:'none',borderRadius:20,padding:'6px 12px',fontSize:'0.75rem'}}>
+              ↻
+            </button>
           </div>
         </div>
       )}
 
-      {mode==='view'&&(<div style={{background:'linear-gradient(135deg,#2c3e50,#34495e)',padding:'10px',textAlign:'center',color:'#fff',fontSize:'0.9rem',flexShrink:0}}>🏢 Building Overview</div>)}
-
-      {emergency&&(<div style={{padding:'7px',background:'linear-gradient(90deg,#cc2020,#ff4040,#cc2020)',color:'#fff',textAlign:'center',fontWeight:'bold',fontSize:'0.82rem',flexShrink:0}}>🚨 FIRE DETECTED — EVACUATE NOW 🚨</div>)}
-      {pathInfo?.error&&(<div style={{padding:'6px 14px',background:'rgba(200,30,30,0.9)',color:'#fff',fontSize:'0.78rem',textAlign:'center',flexShrink:0}}>❌ {pathInfo.error}</div>)}
-
-      {mode==='navigate'&&(
-        <div style={{display:'flex',gap:6,padding:'5px 10px',background:'rgba(10,12,18,0.92)',flexWrap:'wrap',flexShrink:0,alignItems:'center'}}>
-          {wc&&<span style={{background:'#1a73e8',color:'#fff',borderRadius:12,padding:'3px 9px',fontSize:'0.7rem'}}>♿ Wheelchair</span>}
-          <button onClick={()=>setShowNodes(s=>!s)} style={pB(showNodes)}>📍 Nodes</button>
-          <button onClick={()=>setVoice(s=>!s)} style={pB(voice)}>{voice?'🔊':'🔇'} Voice</button>
-          <button onClick={()=>setVib(s=>!s)} style={pB(vib)}>{vib?'📳':'📴'} Vibration</button>
-          {hearing&&<button onClick={()=>setShowVibGuide(true)} style={pB(false)}>❓ Guide</button>}
-          {bleMsg&&<span style={{fontSize:'0.62rem',color:'#7bb8ff',marginLeft:'auto'}}>{bleMsg}</span>}
+      {/* TOOLBAR — all controls visible */}
+      {mode === 'navigate' && (
+        <div style={{
+          position:'absolute', top:52, left:0, right:0, zIndex:99,
+          display:'flex', gap:6, padding:'6px 12px', flexWrap:'wrap',
+          background:'rgba(10,12,18,0.85)',
+        }}>
+          {wheelchairMode && <span style={{background:'#1a73e8',color:'#fff',borderRadius:12,padding:'4px 10px',fontSize:'0.7rem'}}>♿ Wheelchair</span>}
+          <button onClick={() => setShowNodes(!showNodes)} style={{
+            background: showNodes ? '#1a73e8' : '#444',color:'#fff',border:'none',borderRadius:12,padding:'4px 10px',fontSize:'0.7rem',
+          }}>
+            📍 Nodes
+          </button>
+          <button onClick={() => setVoiceEnabled(!voiceEnabled)} style={{
+            background: voiceEnabled ? '#1a73e8' : '#444',color:'#fff',border:'none',borderRadius:12,padding:'4px 10px',fontSize:'0.7rem',
+          }}>
+            {voiceEnabled ? '🔊' : '🔇'} Voice
+          </button>
+          <button onClick={() => setVibrationEnabled(!vibrationEnabled)} style={{
+            background: vibrationEnabled ? '#1a73e8' : '#444',color:'#fff',border:'none',borderRadius:12,padding:'4px 10px',fontSize:'0.7rem',
+          }}>
+            {vibrationEnabled ? '📳' : '📴'} Vibration
+          </button>
+          {hearingImpaired && (
+            <button onClick={() => setShowVibGuide(true)} style={{
+              background:'#444',color:'#fff',border:'none',borderRadius:12,padding:'4px 10px',fontSize:'0.7rem',
+            }}>
+              ❓ Guide
+            </button>
+          )}
         </div>
       )}
 
-      {/* CANVAS */}
-      <div ref={containerRef} style={{flex:1,position:'relative',overflow:'hidden',cursor:hovered?'pointer':'grab'}}>
-        <canvas ref={canvasRef} style={{display:'block',width:'100%',height:'100%',touchAction:'none'}}
-          onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={()=>{isDrag.current=false;setHovered(null);}}
-          onWheel={onWheel} onTouchStart={onDown} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}/>
-      </div>
-
-      {/* STEP CONTROLS */}
-      {directions.length>0&&mode==='navigate'&&(
-        <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 12px',background:'#1a1d24',borderTop:'1px solid #2a2d36',flexShrink:0}}>
-          <button onClick={prevStep} disabled={step===0} style={sB(step>0)}>◀ Prev</button>
-          <span style={{color:'#6b7280',fontSize:'0.72rem',flex:1,textAlign:'center'}}>{step+1} / {directions.length}</span>
-          <button onClick={nextStep} disabled={step===directions.length-1} style={sB(step<directions.length-1)}>Next ▶</button>
+      {mode === 'view' && (
+        <div style={{
+          position:'absolute', top:0, left:0, right:0, zIndex:100,
+          background: 'linear-gradient(135deg, #2c3e50, #34495e)',
+          padding: '12px 16px', textAlign:'center', color:'#fff', fontSize:'0.9rem',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.3)',
+        }}>
+          🏢 Building Overview
         </div>
       )}
 
-      {/* LEGEND */}
-      <div style={{display:'flex',gap:10,padding:'4px 12px',background:'#1a1d24',borderTop:'1px solid #2a2d36',flexShrink:0,flexWrap:'wrap',fontSize:'0.63rem'}}>
-        {[['#e02020','Exit'],['#e8a800','Elevator'],['#d06000','Stairs'],['#20a840','Refuge'],['#2288ff','You'],['#3388ff','Path']].map(([c,l])=>(
-          <span key={l} style={{display:'flex',alignItems:'center',gap:4,color:'#8892a4'}}><span style={{width:8,height:8,borderRadius:'50%',background:c,display:'inline-block'}}/>{l}</span>
-        ))}
+
+
+
+      {/* Error display */}
+      {mode === 'navigate' && pathInfo?.error && (
+        <div style={{position:'absolute',top:56,left:16,right:16,zIndex:90,background:'rgba(200,30,30,0.9)',color:'#fff',padding:'8px 12px',borderRadius:8,fontSize:'0.8rem',textAlign:'center'}}>
+          {pathInfo.error}
+        </div>
+      )}
+
+      {/* 3D CANVAS */}
+      <div
+        className="map-canvas-container"
+        ref={mountRef}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onWheel={handleWheel}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+      />
+
+      {/* RIGHT SIDE CONTROLS */}
+      {mode === 'navigate' && (
+        <div style={{position:'absolute',bottom:60,right:12,zIndex:90,display:'flex',flexDirection:'column',gap:8}}>
+          {bleScanning && (
+            <button onClick={() => setGpsFollow(!gpsFollow)} style={{
+              background: gpsFollow ? '#1a73e8' : 'rgba(40,40,40,0.85)',
+              color:'#fff',border:'none',borderRadius:'50%',
+              width:50,height:50,fontSize:'1.3rem',boxShadow:'0 2px 10px rgba(0,0,0,0.5)',
+              display:'flex',alignItems:'center',justifyContent:'center',
+            }}>
+              🧭
+            </button>
+          )}
+          <button onClick={() => setShowSettings(!showSettings)} style={{
+            background:'rgba(40,40,40,0.85)',color:'#fff',border:'none',borderRadius:'50%',
+            width:42,height:42,fontSize:'1.1rem',boxShadow:'0 2px 8px rgba(0,0,0,0.4)',
+          }}>
+            ⚙️
+          </button>
+        </div>
+      )}
+
+      {/* SETTINGS PANEL */}
+      {showSettings && mode === 'navigate' && (
+        <div style={{
+          position:'absolute',bottom:120,right:12,zIndex:95,
+          background:'rgba(20,25,35,0.95)',borderRadius:12,padding:'12px 14px',
+          boxShadow:'0 4px 20px rgba(0,0,0,0.5)',minWidth:180,
+        }}>
+          <div style={{color:'#aaa',fontSize:'0.65rem',marginBottom:8,textTransform:'uppercase',letterSpacing:1}}>Settings</div>
+          {[
+            { label: 'Voice', icon: voiceEnabled ? '🔊' : '🔇', active: voiceEnabled, fn: () => setVoiceEnabled(!voiceEnabled) },
+            { label: 'Vibration', icon: vibrationEnabled ? '📳' : '📴', active: vibrationEnabled, fn: () => setVibrationEnabled(!vibrationEnabled) },
+            { label: 'Show Nodes', icon: '📍', active: showNodes, fn: () => setShowNodes(!showNodes) },
+            { label: 'Wheelchair', icon: '♿', active: wheelchairMode, fn: null },
+          ].map((item, i) => (
+            <div key={i} onClick={item.fn} style={{
+              display:'flex',alignItems:'center',justifyContent:'space-between',
+              padding:'8px 4px',borderBottom: i < 3 ? '1px solid rgba(255,255,255,0.08)' : 'none',
+              cursor: item.fn ? 'pointer' : 'default', opacity: item.fn ? 1 : 0.5,
+            }}>
+              <span style={{color:'#fff',fontSize:'0.82rem'}}>{item.icon} {item.label}</span>
+              <span style={{
+                width:36,height:20,borderRadius:10,
+                background: item.active ? '#1a73e8' : '#444',
+                display:'flex',alignItems:'center',padding:'0 2px',
+                justifyContent: item.active ? 'flex-end' : 'flex-start',
+                transition:'all 0.2s',
+              }}>
+                <span style={{width:16,height:16,borderRadius:'50%',background:'#fff'}}/>
+              </span>
+            </div>
+          ))}
+          {hearingImpaired && (
+            <button onClick={() => { setShowVibGuide(true); setShowSettings(false); }} style={{
+              width:'100%',marginTop:8,background:'#333',color:'#fff',border:'none',
+              borderRadius:8,padding:'8px',fontSize:'0.78rem',
+            }}>
+              📳 Vibration Guide
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* COMPACT LEGEND */}
+      <div style={{
+        position:'absolute',bottom:8,left:8,zIndex:80,
+        display:'flex',gap:8,background:'rgba(0,0,0,0.6)',padding:'4px 10px',borderRadius:12,fontSize:'0.6rem',color:'#fff',
+      }}>
+        <span>🔴 Exit</span><span>🟡 Elevator</span><span>🟠 Stairs</span><span>🟢 Refuge</span><span>🔵 You</span>
       </div>
 
-      {/* VIB GUIDE MODAL */}
-      {showVibGuide&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100,padding:20}} onClick={()=>setShowVibGuide(false)}>
-          <div style={{background:'#1a1d24',borderRadius:16,padding:24,maxWidth:400,width:'100%',maxHeight:'80vh',overflowY:'auto'}} onClick={e=>e.stopPropagation()}>
-            <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}><h3 style={{color:'#fff',margin:0}}>📳 Vibration Guide</h3><button onClick={()=>setShowVibGuide(false)} style={{background:'none',border:'none',color:'#aaa',fontSize:'1.2rem',cursor:'pointer'}}>✕</button></div>
-            {[['⬆️','Straight','1 buzz','straight'],['⬅️','Turn Left','2 buzzes','left'],['➡️','Turn Right','3 buzzes','right'],['📍','Route Start','4 buzzes','start'],['⚡','Elevator/Stairs','5 buzzes','special'],['🏁','Arrived','1 long buzz','arrive'],['🔥','Emergency','Rapid pulses','emergency']].map(([icon,label,desc,type])=>(
-              <div key={type} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:'1px solid #2a2d36'}}>
-                <div style={{display:'flex',gap:12,alignItems:'center'}}><span style={{fontSize:'1.3rem'}}>{icon}</span><div><div style={{color:'#fff',fontSize:'0.88rem'}}>{label}</div><div style={{color:'#6b7280',fontSize:'0.72rem'}}>{desc}</div></div></div>
-                <button onClick={()=>{type==='emergency'?vibrateEmergency():vibrate(type);speak(label);}} style={{background:'#2a3a5a',border:'1px solid #3b82f6',color:'#7bb8ff',borderRadius:8,padding:'5px 12px',cursor:'pointer',fontSize:'0.75rem'}}>▶ Test</button>
-              </div>
-            ))}
-            <button onClick={()=>setShowVibGuide(false)} style={{marginTop:16,width:'100%',padding:10,background:'#282c36',border:'1px solid #333',color:'#aaa',borderRadius:10,cursor:'pointer'}}>Close</button>
+
+
+      {/* VIBRATION GUIDE MODAL */}
+      {showVibGuide && (
+        <div className="vib-modal-overlay" onClick={() => setShowVibGuide(false)}>
+          <div className="vib-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="vib-modal-header">
+              <h3>📳 Vibration Guide</h3>
+              <button className="vib-modal-close" onClick={() => setShowVibGuide(false)}>✕</button>
+            </div>
+
+            <p className="vib-modal-desc">
+              Each navigation direction has a unique vibration pattern.
+              Press <strong>Test</strong> to feel each pattern.
+            </p>
+
+            <div className="vib-modal-list">
+              {[
+                { icon: '⬆️', label: 'Continue Straight', desc: '1 buzz', type: 'straight', voice: 'Continue straight. 1 buzz.' },
+                { icon: '⬅️', label: 'Turn Left', desc: '2 buzzes', type: 'left', voice: 'Turn left. 2 buzzes.' },
+                { icon: '➡️', label: 'Turn Right', desc: '3 buzzes', type: 'right', voice: 'Turn right. 3 buzzes.' },
+                { icon: '📍', label: 'Route Started', desc: '4 buzzes', type: 'start', voice: 'Route started. 4 buzzes.' },
+                { icon: '⚡', label: 'Elevator / Ramp / Stairs', desc: '5 buzzes', type: 'special', voice: 'Elevator, ramp, or stairs. 5 buzzes.' },
+                { icon: '🏁', label: 'You Have Arrived', desc: '1 long buzz', type: 'arrive', voice: 'You have arrived. 1 long buzz.' },
+                { icon: '🔥', label: 'FIRE EMERGENCY', desc: 'Rapid intense pulses', type: 'emergency', voice: 'Fire emergency. Rapid intense vibration pulses.' },
+              ].map((item, i) => (
+                <div key={i} className={`vib-modal-item ${item.type === 'emergency' ? 'emergency' : ''}`}>
+                  <div className="vib-modal-item-left">
+                    <span className="vib-modal-icon">{item.icon}</span>
+                    <div>
+                      <div className="vib-modal-label">{item.label}</div>
+                      <div className="vib-modal-pattern">{item.desc}</div>
+                    </div>
+                  </div>
+                  <button
+                    className={`vib-test-btn ${item.type === 'emergency' ? 'emergency' : ''}`}
+                    onClick={() => {
+                      if (item.type === 'emergency') {
+                        vibrateEmergency();
+                      } else {
+                        vibrate(item.type);
+                      }
+                      speak(item.voice);
+                    }}
+                  >
+                    ▶ Test
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="vib-modal-footer">
+              <button
+                className="vib-readall-btn"
+                onClick={() => {
+                  const items = [
+                    { type: 'straight', voice: 'Continue straight. 1 buzz.', delay: 0 },
+                    { type: 'left', voice: 'Turn left. 2 buzzes.', delay: 3000 },
+                    { type: 'right', voice: 'Turn right. 3 buzzes.', delay: 6000 },
+                    { type: 'start', voice: 'Route started. 4 buzzes.', delay: 9000 },
+                    { type: 'special', voice: 'Elevator, ramp, or stairs. 5 buzzes.', delay: 12000 },
+                    { type: 'arrive', voice: 'You have arrived. 1 long buzz.', delay: 15000 },
+                    { type: 'emergency', voice: 'Fire emergency. Rapid intense pulses.', delay: 18000 },
+                  ];
+                  speak('Vibration guide.');
+                  items.forEach(item => {
+                    setTimeout(() => {
+                      speak(item.voice);
+                      if (item.type === 'emergency') {
+                        vibrateEmergency();
+                      } else {
+                        vibrate(item.type);
+                      }
+                    }, item.delay);
+                  });
+                }}
+              >
+                🔊 Read All Aloud
+              </button>
+              <button className="vib-close-btn" onClick={() => setShowVibGuide(false)}>
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}
