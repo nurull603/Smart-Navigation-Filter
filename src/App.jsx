@@ -129,14 +129,14 @@ function SignupPage({ onNavigate, onSignup, loading }) {
         </div>
         <div className="form-group">
           <label>Accessibility Needs <span className="required">*required</span></label>
-          <p className="field-hint">Select all that apply.</p>
+          <p className="field-hint" style={{ color: '#4ade80'}}>Select all that apply.</p>
           <DisabilitySelector disabilities={disabilities} onChange={setDisabilities} />
         </div>
         <button className="btn-primary full-width" onClick={handleSubmit} disabled={loading}>
           {loading ? 'Creating Account...' : 'Create Account'}
         </button>
-        <p className="switch-text">
-          Already have an account? <span className="link" onClick={() => onNavigate('login')}>Log in</span>
+        <p className="switch-text" style={{ color: '#4ade80'}}>
+          Already have an account? <span className="link" onClick={() => onNavigate('login')} style={{ color: '#e8f0f8'}}>Log in</span>
         </p>
       </div>
     </div>
@@ -177,8 +177,8 @@ function LoginPage({ onNavigate, onLogin, loading }) {
         <button className="btn-primary full-width" onClick={handleSubmit} disabled={loading}>
           {loading ? 'Logging in...' : 'Log In'}
         </button>
-        <p className="switch-text">
-          Don't have an account? <span className="link" onClick={() => onNavigate('signup')}>Create one</span>
+        <p className="switch-text" style={{ color: '#4ade80'}}>
+          Don't have an account? <span className="link" onClick={() => onNavigate('signup')} style={{ color: '#e8f0f8'}}>Create one</span>
         </p>
       </div>
     </div>

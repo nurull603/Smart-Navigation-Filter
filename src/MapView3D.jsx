@@ -52,6 +52,7 @@ async function getNativeTTS() {
 }
 getNativeTTS();
 
+
 let isSpeaking = false;
 const speakQueue = [];
 let speakTimeout = null;
