@@ -124,40 +124,6 @@ function webSpeak(text) {
 }
 
 // ============================================================
-// VIBRATION ENGINE (for deaf/hearing impaired users)
-// ============================================================
-// Patterns: different NUMBER of buzzes — 350ms pause between each for easy counting
-const VIBRATION_PATTERNS = {
-  straight:  [200],                                        // 1 buzz
-  left:      [200, 350, 200],                              // 2 buzzes
-  right:     [200, 350, 200, 350, 200],                    // 3 buzzes
-  start:     [200, 350, 200, 350, 200, 350, 200],          // 4 buzzes
-  special:   [200, 350, 200, 350, 200, 350, 200, 350, 200], // 5 buzzes (elevator/ramp/stairs)
-  arrive:    [800],                                        // 1 long buzz
-  emergency: [200, 80, 200, 80, 200, 80, 200, 80, 200, 80, 500], // rapid pulses + long
-};
-
-function vibrate(type) {
-  if (!('vibrate' in navigator)) return;
-  const pattern = VIBRATION_PATTERNS[type] || VIBRATION_PATTERNS.straight;
-  navigator.vibrate(pattern);
-}
-
-function vibrateEmergency() {
-  if (!('vibrate' in navigator)) return;
-  // Strong repeated pattern for emergency — runs 3 times
-  navigator.vibrate([
-    200, 80, 200, 80, 200, 80, 200, 80, 200, 300,
-    200, 80, 200, 80, 200, 80, 200, 80, 200, 300,
-    500, 200, 500,
-  ]);
-}
-
-function stopVibration() {
-  if ('vibrate' in navigator) navigator.vibrate(0);
-}
-
-// ============================================================
 // GENERATE DIRECTIONS (improved for voice)
 // ============================================================
 function generateVoiceDirections(path, nodes) {
@@ -1354,7 +1320,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
   }, [showNodes]);
 
   // ============================================================
-  // UPDATE ROUTE PATH (FIXED)
+  // UPDATE ROUTE PATH 
   // ============================================================
   useEffect(() => {
     const scene = sceneRef.current;
@@ -1776,10 +1742,12 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
       {/* CLEAN NAVIGATION BAR */}
       {mode === 'navigate' && (
         <div style={{
-          position:'absolute', top:0, left:0, right:0, zIndex:100,
+          position:'relative', 
+          top:0, left:0, right:0, zIndex:100,
           background: 'linear-gradient(135deg, #1a73e8, #4fc3f7)',
           padding: '12px 16px', display:'flex', alignItems:'center', justifyContent:'space-between',
           boxShadow: '0 2px 12px rgba(0,0,0,0.3)',
+          flexShrink: 0
         }}>
           <div style={{flex:1}}>
             {directions.length > 0 && currentDir ? (
@@ -1832,56 +1800,15 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
         </div>
       )}
 
-      {/* TOOLBAR — all controls visible */}
-      {mode === 'navigate' && (
-        <div style={{
-          position:'absolute', top:52, left:0, right:0, zIndex:99,
-          display:'flex', gap:6, padding:'6px 12px', flexWrap:'wrap',
-          background:'rgba(10,12,18,0.85)',
-        }}>
-          {wheelchairMode && <span style={{background:'#1a73e8',color:'#fff',borderRadius:12,padding:'4px 10px',fontSize:'0.7rem'}}>♿ Wheelchair</span>}
-          <button onClick={() => setShowNodes(!showNodes)} style={{
-            background: showNodes ? '#1a73e8' : '#444',color:'#fff',border:'none',borderRadius:12,padding:'4px 10px',fontSize:'0.7rem',
-          }}>
-            📍 Nodes
-          </button>
-          <button onClick={() => setVoiceEnabled(!voiceEnabled)} style={{
-            background: voiceEnabled ? '#1a73e8' : '#444',color:'#fff',border:'none',borderRadius:12,padding:'4px 10px',fontSize:'0.7rem',
-          }}>
-            {voiceEnabled ? '🔊' : '🔇'} Voice
-          </button>
-          <button onClick={() => setVibrationEnabled(!vibrationEnabled)} style={{
-            background: vibrationEnabled ? '#1a73e8' : '#444',color:'#fff',border:'none',borderRadius:12,padding:'4px 10px',fontSize:'0.7rem',
-          }}>
-            {vibrationEnabled ? '📳' : '📴'} Vibration
-          </button>
-          {hearingImpaired && (
-            <button onClick={() => setShowVibGuide(true)} style={{
-              background:'#444',color:'#fff',border:'none',borderRadius:12,padding:'4px 10px',fontSize:'0.7rem',
-            }}>
-              ❓ Guide
-            </button>
-          )}
-        </div>
-      )}
-
       {mode === 'view' && (
-        <div style={{
-          position:'absolute', top:0, left:0, right:0, zIndex:100,
-          background: 'linear-gradient(135deg, #2c3e50, #34495e)',
-          padding: '12px 16px', textAlign:'center', color:'#fff', fontSize:'0.9rem',
-          boxShadow: '0 2px 12px rgba(0,0,0,0.3)',
-        }}>
+        <div className="view-mode-header">
           🏢 Building Overview
         </div>
       )}
 
-
-
-
       {/* Error display */}
       {mode === 'navigate' && pathInfo?.error && (
-        <div style={{position:'absolute',top:56,left:16,right:16,zIndex:90,background:'rgba(200,30,30,0.9)',color:'#fff',padding:'8px 12px',borderRadius:8,fontSize:'0.8rem',textAlign:'center'}}>
+        <div className="map-error-overlay">
           {pathInfo.error}
         </div>
       )}
@@ -1890,6 +1817,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
       <div
         className="map-canvas-container"
         ref={mountRef}
+        style={{ flex: 1, position: 'relative' }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -1905,19 +1833,24 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
           {bleScanning && (
             <button onClick={() => setGpsFollow(!gpsFollow)} style={{
               background: gpsFollow ? '#1a73e8' : 'rgba(40,40,40,0.85)',
-              color:'#fff',border:'none',borderRadius:'50%',
-              width:50,height:50,fontSize:'1.3rem',boxShadow:'0 2px 10px rgba(0,0,0,0.5)',
-              display:'flex',alignItems:'center',justifyContent:'center',
+              color:'#fff',
+              border: gpsFollow ? '3px solid #20a840' : 'none', 
+              boxSizing: 'border-box', 
+              borderRadius: '50%',
+              width: 50,
+              height: 50,
+              fontSize: '1.3rem',
+              boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              padding: 0,
             }}>
               🧭
             </button>
           )}
-          <button onClick={() => setShowSettings(!showSettings)} style={{
-            background:'rgba(40,40,40,0.85)',color:'#fff',border:'none',borderRadius:'50%',
-            width:42,height:42,fontSize:'1.1rem',boxShadow:'0 2px 8px rgba(0,0,0,0.4)',
-          }}>
-            ⚙️
-          </button>
+          
         </div>
       )}
 
@@ -1965,98 +1898,12 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
 
       {/* COMPACT LEGEND */}
       <div style={{
-        position:'absolute',bottom:8,left:8,zIndex:80,
+        position:'absolute',bottom:8,left:10,zIndex:80,
         display:'flex',gap:8,background:'rgba(0,0,0,0.6)',padding:'4px 10px',borderRadius:12,fontSize:'0.6rem',color:'#fff',
       }}>
         <span>🔴 Exit</span><span>🟡 Elevator</span><span>🟠 Stairs</span><span>🟢 Refuge</span><span>🔵 You</span>
       </div>
-
-
-
-      {/* VIBRATION GUIDE MODAL */}
-      {showVibGuide && (
-        <div className="vib-modal-overlay" onClick={() => setShowVibGuide(false)}>
-          <div className="vib-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="vib-modal-header">
-              <h3>📳 Vibration Guide</h3>
-              <button className="vib-modal-close" onClick={() => setShowVibGuide(false)}>✕</button>
-            </div>
-
-            <p className="vib-modal-desc">
-              Each navigation direction has a unique vibration pattern.
-              Press <strong>Test</strong> to feel each pattern.
-            </p>
-
-            <div className="vib-modal-list">
-              {[
-                { icon: '⬆️', label: 'Continue Straight', desc: '1 buzz', type: 'straight', voice: 'Continue straight. 1 buzz.' },
-                { icon: '⬅️', label: 'Turn Left', desc: '2 buzzes', type: 'left', voice: 'Turn left. 2 buzzes.' },
-                { icon: '➡️', label: 'Turn Right', desc: '3 buzzes', type: 'right', voice: 'Turn right. 3 buzzes.' },
-                { icon: '📍', label: 'Route Started', desc: '4 buzzes', type: 'start', voice: 'Route started. 4 buzzes.' },
-                { icon: '⚡', label: 'Elevator / Ramp / Stairs', desc: '5 buzzes', type: 'special', voice: 'Elevator, ramp, or stairs. 5 buzzes.' },
-                { icon: '🏁', label: 'You Have Arrived', desc: '1 long buzz', type: 'arrive', voice: 'You have arrived. 1 long buzz.' },
-                { icon: '🔥', label: 'FIRE EMERGENCY', desc: 'Rapid intense pulses', type: 'emergency', voice: 'Fire emergency. Rapid intense vibration pulses.' },
-              ].map((item, i) => (
-                <div key={i} className={`vib-modal-item ${item.type === 'emergency' ? 'emergency' : ''}`}>
-                  <div className="vib-modal-item-left">
-                    <span className="vib-modal-icon">{item.icon}</span>
-                    <div>
-                      <div className="vib-modal-label">{item.label}</div>
-                      <div className="vib-modal-pattern">{item.desc}</div>
-                    </div>
-                  </div>
-                  <button
-                    className={`vib-test-btn ${item.type === 'emergency' ? 'emergency' : ''}`}
-                    onClick={() => {
-                      if (item.type === 'emergency') {
-                        vibrateEmergency();
-                      } else {
-                        vibrate(item.type);
-                      }
-                      speak(item.voice);
-                    }}
-                  >
-                    ▶ Test
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            <div className="vib-modal-footer">
-              <button
-                className="vib-readall-btn"
-                onClick={() => {
-                  const items = [
-                    { type: 'straight', voice: 'Continue straight. 1 buzz.', delay: 0 },
-                    { type: 'left', voice: 'Turn left. 2 buzzes.', delay: 3000 },
-                    { type: 'right', voice: 'Turn right. 3 buzzes.', delay: 6000 },
-                    { type: 'start', voice: 'Route started. 4 buzzes.', delay: 9000 },
-                    { type: 'special', voice: 'Elevator, ramp, or stairs. 5 buzzes.', delay: 12000 },
-                    { type: 'arrive', voice: 'You have arrived. 1 long buzz.', delay: 15000 },
-                    { type: 'emergency', voice: 'Fire emergency. Rapid intense pulses.', delay: 18000 },
-                  ];
-                  speak('Vibration guide.');
-                  items.forEach(item => {
-                    setTimeout(() => {
-                      speak(item.voice);
-                      if (item.type === 'emergency') {
-                        vibrateEmergency();
-                      } else {
-                        vibrate(item.type);
-                      }
-                    }, item.delay);
-                  });
-                }}
-              >
-                🔊 Read All Aloud
-              </button>
-              <button className="vib-close-btn" onClick={() => setShowVibGuide(false)}>
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
+
