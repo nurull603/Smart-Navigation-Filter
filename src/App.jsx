@@ -657,11 +657,11 @@ function App() {
   const handleSaveSettings = async (updates) => {
     if (!currentUser) return { error: 'Not logged in' };
     try {
-      await updateDoc(doc(db, 'users', currentUser.uid), {
+      await setDoc(doc(db, 'users', currentUser.uid), {
         name: updates.name,
         disabilities: updates.disabilities,
         updatedAt: new Date().toISOString(),
-      });
+      }, { merge: true });
       setUserProfile(prev => ({ ...prev, name: updates.name, disabilities: updates.disabilities }));
       return {};
     } catch (err) {
