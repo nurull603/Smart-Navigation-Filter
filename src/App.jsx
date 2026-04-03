@@ -68,7 +68,7 @@ function WelcomePage({ onNavigate }) {
       <div className="welcome-content">
         <img src={logo} alt="Logo" className="logo-img" />
         <h1>Smart Navigation Filter</h1>
-        <p className="tagline">Safe Paths. Safe Navigation</p>
+        <p className="tagline">Smart Navigation. Safe Paths</p>
         <div className="welcome-buttons">
           <button className="btn-primary" onClick={() => onNavigate('signup')}>Create Account</button>
           <button className="btn-secondary" onClick={() => onNavigate('login')}>Log In</button>
