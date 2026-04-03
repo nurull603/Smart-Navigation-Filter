@@ -787,40 +787,39 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
 
   // Tillet Building — 7 beacons, L-shaped layout
   // Tillet L-shape: Upper U + 214ft corridor + Lower U (1 unit = 4 feet)
-  // B1=UC_T3(16,1.25), B2=UC_L2(27.5,9), B3=CONN_Q2(2,40), B4=LT_MID(14.5,66.5), B5=LL_3(27,78.5), B6=LB_3(15,96.5), B7=LR_3(2,84.5)
+  // B1=UC_T3(16,1.25), B2=UC_L2(27.5,9), B3=CONN_Q2(2,40), B4=LT_MID(14.5,66.5), B5=EXIT_CENTER(8,81), B6=LL_4(27,82.5)
   const BEACON_SEGMENTS = [
     { from: 'BEACON_2', to: 'BEACON_1', waypoints: [  // Upper left bay → Top center
       { x: 27.5, y: 9 }, { x: 27.5, y: 5 }, { x: 27.5, y: 1.25 }, { x: 24, y: 1.25 }, { x: 20, y: 1.25 }, { x: 16, y: 1.25 },
     ]},
-    { from: 'BEACON_1', to: 'BEACON_3', waypoints: [  // Top center → right bay → down 214ft corridor
+    { from: 'BEACON_1', to: 'BEACON_3', waypoints: [  // Top center → right bay → corridor mid
       { x: 16, y: 1.25 }, { x: 12, y: 1.25 }, { x: 8, y: 1.25 }, { x: 4, y: 1.25 }, { x: 2, y: 1.25 },
       { x: 2, y: 5 }, { x: 2, y: 9 }, { x: 2, y: 13 }, { x: 2, y: 21 }, { x: 2, y: 29 }, { x: 2, y: 37 }, { x: 2, y: 40 },
     ]},
-    { from: 'BEACON_3', to: 'BEACON_4', waypoints: [  // Corridor mid → lower top bar
+    { from: 'BEACON_3', to: 'BEACON_4', waypoints: [  // Corridor mid → lower top bar center
       { x: 2, y: 40 }, { x: 2, y: 48 }, { x: 2, y: 56 }, { x: 2, y: 66.5 },
       { x: 6.5, y: 66.5 }, { x: 10.5, y: 66.5 }, { x: 14.5, y: 66.5 },
     ]},
-    { from: 'BEACON_4', to: 'BEACON_5', waypoints: [  // Lower top bar → left leg
+    { from: 'BEACON_4', to: 'BEACON_6', waypoints: [  // Lower top bar → left leg (LL_4)
       { x: 14.5, y: 66.5 }, { x: 18.5, y: 66.5 }, { x: 22.5, y: 66.5 }, { x: 27, y: 66.5 },
-      { x: 27, y: 70.5 }, { x: 27, y: 74.5 }, { x: 27, y: 78.5 },
+      { x: 27, y: 70.5 }, { x: 27, y: 74.5 }, { x: 27, y: 78.5 }, { x: 27, y: 82.5 },
     ]},
-    { from: 'BEACON_5', to: 'BEACON_6', waypoints: [  // Left leg → bottom bar
-      { x: 27, y: 78.5 }, { x: 27, y: 82.5 }, { x: 27, y: 86.5 }, { x: 27, y: 90.5 }, { x: 27, y: 96.5 },
-      { x: 23, y: 96.5 }, { x: 19, y: 96.5 }, { x: 15, y: 96.5 },
+    { from: 'BEACON_4', to: 'BEACON_5', waypoints: [  // Lower top bar → right leg → EXIT_CENTER
+      { x: 14.5, y: 66.5 }, { x: 10.5, y: 66.5 }, { x: 6.5, y: 66.5 }, { x: 2, y: 66.5 },
+      { x: 2, y: 72.5 }, { x: 2, y: 76.5 }, { x: 2, y: 80.5 }, { x: 8, y: 81 },
     ]},
-    { from: 'BEACON_6', to: 'BEACON_4', waypoints: [  // Bottom bar → right leg → lower top (close loop)
-      { x: 15, y: 96.5 }, { x: 11, y: 96.5 }, { x: 6.5, y: 96.5 }, { x: 2, y: 96.5 },
-      { x: 2, y: 88.5 }, { x: 2, y: 80.5 }, { x: 2, y: 72.5 },
-      { x: 2, y: 66.5 }, { x: 6.5, y: 66.5 }, { x: 10.5, y: 66.5 }, { x: 14.5, y: 66.5 },
+    { from: 'BEACON_6', to: 'BEACON_5', waypoints: [  // Left leg → bottom bar → right leg → EXIT_CENTER
+      { x: 27, y: 82.5 }, { x: 27, y: 86.5 }, { x: 27, y: 90.5 }, { x: 27, y: 96.5 },
+      { x: 19, y: 96.5 }, { x: 11, y: 96.5 }, { x: 2, y: 96.5 },
+      { x: 2, y: 88.5 }, { x: 2, y: 80.5 }, { x: 8, y: 81 },
     ]},
-    { from: 'BEACON_6', to: 'BEACON_3', waypoints: [  // Bottom bar → right leg → corridor
-      { x: 15, y: 96.5 }, { x: 11, y: 96.5 }, { x: 6.5, y: 96.5 }, { x: 2, y: 96.5 },
-      { x: 2, y: 88.5 }, { x: 2, y: 80.5 }, { x: 2, y: 72.5 },
-      { x: 2, y: 66.5 }, { x: 2, y: 60 }, { x: 2, y: 52 }, { x: 2, y: 44 }, { x: 2, y: 40 },
+    { from: 'BEACON_5', to: 'BEACON_3', waypoints: [  // EXIT_CENTER → right leg up → corridor
+      { x: 8, y: 81 }, { x: 2, y: 80.5 }, { x: 2, y: 72.5 }, { x: 2, y: 66.5 },
+      { x: 2, y: 60 }, { x: 2, y: 52 }, { x: 2, y: 44 }, { x: 2, y: 40 },
     ]},
   ];
 
-  const BEACON_ORDER = ['BEACON_2', 'BEACON_1', 'BEACON_3', 'BEACON_4', 'BEACON_5', 'BEACON_6'];
+  const BEACON_ORDER = ['BEACON_2', 'BEACON_1', 'BEACON_3', 'BEACON_4', 'BEACON_6', 'BEACON_5'];
 
   // Interpolate position along a segment's waypoints
   const getSegmentPosition = (segment, ratio) => {
@@ -1468,7 +1467,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
   }, [selectedStart, selectedEnd, emergencyMode, bleScanning]);
 
   // ============================================================
-  // UPDATE FIRE MARKERS
+  // UPDATE FIRE MARKERS — 🔥 emoji on exact blocked node positions
   // ============================================================
   useEffect(() => {
     const scene = sceneRef.current;
@@ -1483,6 +1482,67 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
 
     const fireGroup = new THREE.Group();
 
+    // Find all blocked nodes from the active fire zone
+    const blockedNodeIds = new Set();
+    Object.values(FIRE_ZONES).forEach(zone => {
+      if (zone.blockedEdges.some(zb => blockedEdges.some(b => b.from === zb.from && b.to === zb.to))) {
+        (zone.blockedNodes || []).forEach(nid => blockedNodeIds.add(nid));
+      }
+    });
+
+    // Place 🔥 emoji sprites clustered around each blocked node
+    blockedNodeIds.forEach(nodeId => {
+      const node = NODES.find(n => n.id === nodeId);
+      if (!node) return;
+
+      // 3 fire emojis in a cluster around the node
+      const firePositions = [
+        { x: node.x, y: node.y, scale: 3.5 },          // center — on the node
+        { x: node.x - 2.5, y: node.y - 1.5, scale: 2.5 }, // slightly left/above
+        { x: node.x + 2, y: node.y + 1.5, scale: 2.5 },   // slightly right/below
+      ];
+
+      firePositions.forEach((fp, i) => {
+        // Create 🔥 emoji canvas texture
+        const canvas = document.createElement('canvas');
+        canvas.width = 128;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        ctx.font = '96px serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🔥', 64, 64);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        const spriteMat = new THREE.SpriteMaterial({
+          map: texture,
+          transparent: true,
+          depthTest: false,
+        });
+        const sprite = new THREE.Sprite(spriteMat);
+        sprite.position.set(fp.x, 3.5 + (i * 0.3), -fp.y);
+        sprite.scale.set(fp.scale, fp.scale, 1);
+        fireGroup.add(sprite);
+      });
+
+      // Fire glow light on the node
+      const fireLight = new THREE.PointLight(0xff4400, 3, 15);
+      fireLight.position.set(node.x, 2, -node.y);
+      fireGroup.add(fireLight);
+
+      // Pulsing ring on the ground
+      const ringGeo = new THREE.RingGeometry(1.2, 2.0, 32);
+      const ringMat = new THREE.MeshStandardMaterial({
+        color: 0xff2200, emissive: 0xff2200, emissiveIntensity: 1.0,
+        transparent: true, opacity: 0.5, side: THREE.DoubleSide,
+      });
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.set(node.x, 0.08, -node.y);
+      fireGroup.add(ring);
+    });
+
+    // Also draw barriers on blocked edges
     blockedEdges.forEach(b => {
       const n1 = NODES.find(n => n.id === b.from);
       const n2 = NODES.find(n => n.id === b.to);
@@ -1491,22 +1551,6 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
       const midX = (n1.x + n2.x) / 2;
       const midY = (n1.y + n2.y) / 2;
 
-      // Fire emoji sprite using canvas texture
-      const emojiCanvas = document.createElement('canvas');
-      emojiCanvas.width = 128; emojiCanvas.height = 128;
-      const emojiCtx = emojiCanvas.getContext('2d');
-      emojiCtx.font = '96px serif';
-      emojiCtx.textAlign = 'center';
-      emojiCtx.textBaseline = 'middle';
-      emojiCtx.fillText('🔥', 64, 64);
-      const emojiTexture = new THREE.CanvasTexture(emojiCanvas);
-      const spriteMat = new THREE.SpriteMaterial({ map: emojiTexture, transparent: true });
-      const sprite = new THREE.Sprite(spriteMat);
-      sprite.position.set(midX, 2.5, -midY);
-      sprite.scale.set(3, 3, 1);
-      fireGroup.add(sprite);
-
-      // Blocked barrier
       const dx = n2.x - n1.x;
       const dy = n2.y - n1.y;
       const length = Math.sqrt(dx * dx + dy * dy);
