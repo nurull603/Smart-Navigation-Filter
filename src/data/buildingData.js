@@ -462,12 +462,15 @@ export const WALLS = [
 export const FIRE_ZONES = {
   elevator: {
     label: "Elevator Area Fire",
-    blockedNodes: ["EXIT_UL_ELEV", "EXIT_UR_ELEV", "UC_L0", "UC_R0"],
+    blockedNodes: ["EXIT_UL_ELEV", "EXIT_UR_ELEV", "UC_L0", "UC_R0", "ENTRANCE", "LH3_DL", "LH3_DR"],
     blockedEdges: [
       { from: "EXIT_UL_ELEV", to: "UC_L0" },
       { from: "EXIT_UR_ELEV", to: "UC_R0" },
       { from: "UC_L0", to: "UC_T1" },
       { from: "UC_L0", to: "UC_L1" },
+      { from: "UC_L3", to: "ENTRANCE" },
+      { from: "UC_L3", to: "LH3_DL" },
+      { from: "UC_R3", to: "LH3_DR" },
     ],
   },
   entrance: {

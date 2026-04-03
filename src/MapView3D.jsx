@@ -1491,20 +1491,20 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
       const midX = (n1.x + n2.x) / 2;
       const midY = (n1.y + n2.y) / 2;
 
-      // Fire glow
-      const fireLight = new THREE.PointLight(0xff4400, 2, 10);
-      fireLight.position.set(midX, 2, -midY);
-      fireGroup.add(fireLight);
-
-      // Fire sphere
-      const geo = new THREE.SphereGeometry(0.6, 8, 6);
-      const mat = new THREE.MeshStandardMaterial({
-        color: 0xff4400, emissive: 0xff2200, emissiveIntensity: 1.5,
-        transparent: true, opacity: 0.8,
-      });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(midX, 1.5, -midY);
-      fireGroup.add(mesh);
+      // Fire emoji sprite using canvas texture
+      const emojiCanvas = document.createElement('canvas');
+      emojiCanvas.width = 128; emojiCanvas.height = 128;
+      const emojiCtx = emojiCanvas.getContext('2d');
+      emojiCtx.font = '96px serif';
+      emojiCtx.textAlign = 'center';
+      emojiCtx.textBaseline = 'middle';
+      emojiCtx.fillText('🔥', 64, 64);
+      const emojiTexture = new THREE.CanvasTexture(emojiCanvas);
+      const spriteMat = new THREE.SpriteMaterial({ map: emojiTexture, transparent: true });
+      const sprite = new THREE.Sprite(spriteMat);
+      sprite.position.set(midX, 2.5, -midY);
+      sprite.scale.set(3, 3, 1);
+      fireGroup.add(sprite);
 
       // Blocked barrier
       const dx = n2.x - n1.x;
@@ -1514,8 +1514,8 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
 
       const barrierGeo = new THREE.BoxGeometry(length, 0.3, 0.1);
       const barrierMat = new THREE.MeshStandardMaterial({
-        color: 0xff0000, emissive: 0xff0000, emissiveIntensity: 0.5,
-        transparent: true, opacity: 0.6,
+        color: 0xff4400, emissive: 0xff2200, emissiveIntensity: 0.8,
+        transparent: true, opacity: 0.5,
       });
       const barrier = new THREE.Mesh(barrierGeo, barrierMat);
       barrier.position.set(midX, 0.15, -midY);
@@ -1803,6 +1803,19 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
       {mode === 'view' && (
         <div className="view-mode-header">
           🏢 Building Overview
+        </div>
+      )}
+
+      {/* FIRE EMERGENCY BANNER */}
+      {emergencyMode && (
+        <div style={{
+          position: 'absolute', top: 0, left: 0, right: 0, zIndex: 200,
+          background: 'rgba(200,0,0,0.92)', color: 'white',
+          padding: '10px 16px', textAlign: 'center',
+          fontWeight: 'bold', fontSize: '1rem',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+        }}>
+          🔥 FIRE DETECTED — EVACUATING 🔥
         </div>
       )}
 
