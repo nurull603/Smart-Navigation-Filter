@@ -808,20 +808,19 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
       { x: 27, y: 78.5 }, { x: 27, y: 82.5 }, { x: 27, y: 86.5 }, { x: 27, y: 90.5 }, { x: 27, y: 96.5 },
       { x: 23, y: 96.5 }, { x: 19, y: 96.5 }, { x: 15, y: 96.5 },
     ]},
-    { from: 'BEACON_6', to: 'BEACON_7', waypoints: [  // Bottom bar → right leg
+    { from: 'BEACON_6', to: 'BEACON_4', waypoints: [  // Bottom bar → right leg → lower top (close loop)
       { x: 15, y: 96.5 }, { x: 11, y: 96.5 }, { x: 6.5, y: 96.5 }, { x: 2, y: 96.5 },
-      { x: 2, y: 92.5 }, { x: 2, y: 88.5 }, { x: 2, y: 84.5 },
-    ]},
-    { from: 'BEACON_7', to: 'BEACON_4', waypoints: [  // Right leg → lower top (close lower loop)
-      { x: 2, y: 84.5 }, { x: 2, y: 80.5 }, { x: 2, y: 76.5 }, { x: 2, y: 72.5 },
+      { x: 2, y: 88.5 }, { x: 2, y: 80.5 }, { x: 2, y: 72.5 },
       { x: 2, y: 66.5 }, { x: 6.5, y: 66.5 }, { x: 10.5, y: 66.5 }, { x: 14.5, y: 66.5 },
     ]},
-    { from: 'BEACON_7', to: 'BEACON_3', waypoints: [  // Right leg → corridor (via connection)
-      { x: 2, y: 84.5 }, { x: 2, y: 76.5 }, { x: 2, y: 66.5 }, { x: 2, y: 60 }, { x: 2, y: 52 }, { x: 2, y: 44 }, { x: 2, y: 40 },
+    { from: 'BEACON_6', to: 'BEACON_3', waypoints: [  // Bottom bar → right leg → corridor
+      { x: 15, y: 96.5 }, { x: 11, y: 96.5 }, { x: 6.5, y: 96.5 }, { x: 2, y: 96.5 },
+      { x: 2, y: 88.5 }, { x: 2, y: 80.5 }, { x: 2, y: 72.5 },
+      { x: 2, y: 66.5 }, { x: 2, y: 60 }, { x: 2, y: 52 }, { x: 2, y: 44 }, { x: 2, y: 40 },
     ]},
   ];
 
-  const BEACON_ORDER = ['BEACON_2', 'BEACON_1', 'BEACON_3', 'BEACON_4', 'BEACON_5', 'BEACON_6', 'BEACON_7'];
+  const BEACON_ORDER = ['BEACON_2', 'BEACON_1', 'BEACON_3', 'BEACON_4', 'BEACON_5', 'BEACON_6'];
 
   // Interpolate position along a segment's waypoints
   const getSegmentPosition = (segment, ratio) => {

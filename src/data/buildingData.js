@@ -236,7 +236,6 @@ export const BEACONS = [
   { id: "BEACON_4", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4952, nodeId: "LT_MID",  label: "Beacon 4 — Lower Top Center" },
   { id: "BEACON_5", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4953, nodeId: "LL_3",    label: "Beacon 5 — Lower Left Leg" },
   { id: "BEACON_6", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4954, nodeId: "LB_3",    label: "Beacon 6 — Lower Bottom" },
-  { id: "BEACON_7", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4955, nodeId: "LR_3",    label: "Beacon 7 — Lower Right Leg" },
 ];
 
 export const ZONES = [
