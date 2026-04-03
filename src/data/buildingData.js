@@ -236,6 +236,7 @@ export const BEACONS = [
   { id: "BEACON_4", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4952, nodeId: "LT_MID",  label: "Beacon 4 — Lower Top Center" },
   { id: "BEACON_5", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4953, nodeId: "LL_3",    label: "Beacon 5 — Lower Left Leg" },
   { id: "BEACON_6", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4954, nodeId: "LB_3",    label: "Beacon 6 — Lower Bottom" },
+  { id: "BEACON_7", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4955, nodeId: "LR_3",    label: "Beacon 7 — Lower Right Leg" },
 ];
 
 export const ZONES = [
@@ -459,6 +460,16 @@ export const WALLS = [
 ];
 
 export const FIRE_ZONES = {
+  elevator: {
+    label: "Elevator Area Fire",
+    blockedNodes: ["EXIT_UL_ELEV", "EXIT_UR_ELEV", "UC_L0", "UC_R0"],
+    blockedEdges: [
+      { from: "EXIT_UL_ELEV", to: "UC_L0" },
+      { from: "EXIT_UR_ELEV", to: "UC_R0" },
+      { from: "UC_L0", to: "UC_T1" },
+      { from: "UC_L0", to: "UC_L1" },
+    ],
+  },
   entrance: {
     label: "Entrance Stairs Fire",
     blockedNodes: ["ENTRANCE"],
