@@ -254,6 +254,8 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
   const [pathInfo, setPathInfo] = useState(null);
   const [directions, setDirections] = useState([]);
   const [currentStep, setCurrentStep] = useState(0);
+  const [demoRunning, setDemoRunning] = useState(false);
+  const demoRafRef = useRef(null);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
   const [showVibGuide, setShowVibGuide] = useState(false);
@@ -388,6 +390,44 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
         }
       }
     }
+  };
+
+  // ============================================================
+  // DEMO WALK — smooth animation along path nodes
+  // ============================================================
+  const startDemoWalk = (pathOverride) => {
+    const path = pathOverride || currentPath;
+    if (!path || path.length < 2) return;
+    if (demoRafRef.current) cancelAnimationFrame(demoRafRef.current);
+    setDemoRunning(true);
+    const STEP_MS = 700;
+    let seg = 0;
+    let t0 = null;
+    const step = (now) => {
+      if (!blueDotRef.current || seg >= path.length - 1) {
+        setDemoRunning(false);
+        return;
+      }
+      if (!t0) t0 = now;
+      const t = Math.min((now - t0) / STEP_MS, 1);
+      const from = NODES.find(n => n.id === path[seg]);
+      const to   = NODES.find(n => n.id === path[seg + 1]);
+      if (from && to) {
+        blueDotRef.current.position.set(
+          from.x + (to.x - from.x) * t,
+          0,
+          -(from.y + (to.y - from.y) * t)
+        );
+      }
+      if (t >= 1) { seg++; t0 = null; }
+      demoRafRef.current = requestAnimationFrame(step);
+    };
+    demoRafRef.current = requestAnimationFrame(step);
+  };
+
+  const stopDemoWalk = () => {
+    if (demoRafRef.current) cancelAnimationFrame(demoRafRef.current);
+    setDemoRunning(false);
   };
 
   // ============================================================
@@ -1554,6 +1594,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
               setCurrentStep(0);
               if (voiceEnabled) speak('Fire detected near ' + (zone?.label || data.zone) + '. Follow the blue path to safety.');
               if (vibrationEnabled) vibrateEmergency();
+              startDemoWalk(result.path);
             }
           }
         }
@@ -1789,11 +1830,18 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
                 setCurrentStep(0);
                 if (voiceEnabled) speak('Evacuating. Follow the blue path.');
                 if (vibrationEnabled) vibrateEmergency();
+                startDemoWalk(result.path);
               }
             }} style={{background:'rgba(255,80,80,0.85)',color:'#fff',border:'none',borderRadius:20,padding:'6px 12px',fontSize:'0.75rem'}}>
               🚨 Evacuate
             </button>
-            <button onClick={clearAll} style={{background:'rgba(255,255,255,0.15)',color:'#fff',border:'none',borderRadius:20,padding:'6px 12px',fontSize:'0.75rem'}}>
+            {currentPath && (
+              <button onClick={demoRunning ? stopDemoWalk : () => startDemoWalk()}
+                style={{background: demoRunning ? 'rgba(255,180,0,0.85)' : 'rgba(0,180,100,0.85)', color:'#fff', border:'none', borderRadius:20, padding:'6px 12px', fontSize:'0.75rem'}}>
+                {demoRunning ? '⏹ Stop' : '▶ Demo'}
+              </button>
+            )}
+            <button onClick={() => { stopDemoWalk(); clearAll(); }} style={{background:'rgba(255,255,255,0.15)',color:'#fff',border:'none',borderRadius:20,padding:'6px 12px',fontSize:'0.75rem'}}>
               ↻
             </button>
           </div>
