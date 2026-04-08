@@ -230,12 +230,13 @@ export const EDGES = [
 ];
 
 export const BEACONS = [
-  { id: "BEACON_1", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4949, nodeId: "UC_T3",      label: "Beacon 1 — Upper Top Center" },
-  { id: "BEACON_2", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4950, nodeId: "UC_L2",      label: "Beacon 2 — Upper Left Mid" },
-  { id: "BEACON_3", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4951, nodeId: "CONN_Q2",    label: "Beacon 3 — Corridor Mid" },
-  { id: "BEACON_4", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4952, nodeId: "LT_MID",     label: "Beacon 4 — Lower Top Center" },
-  { id: "BEACON_5", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4953, nodeId: "EXIT_CENTER", label: "Beacon 5 — Center Exit" },
-  { id: "BEACON_6", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4954, nodeId: "LL_4",       label: "Beacon 6 — Left Leg Bridge" },
+  { id: "BEACON_1", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4949, nodeId: "UC_T3",   label: "Beacon 1 — Upper Top Center" },
+  { id: "BEACON_2", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4950, nodeId: "UC_L2",   label: "Beacon 2 — Upper Left Mid" },
+  { id: "BEACON_3", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4951, nodeId: "CONN_Q2", label: "Beacon 3 — Corridor Mid" },
+  { id: "BEACON_4", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4952, nodeId: "LT_MID",  label: "Beacon 4 — Lower Top Center" },
+  { id: "BEACON_5", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4953, nodeId: "LL_3",    label: "Beacon 5 — Lower Left Leg" },
+  { id: "BEACON_6", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4954, nodeId: "LB_3",    label: "Beacon 6 — Lower Bottom" },
+  { id: "BEACON_7", uuid: "426C7565-4368-6172-6D42-6561636F6E73", major: 3838, minor: 4955, nodeId: "LR_3",    label: "Beacon 7 — Lower Right Leg" },
 ];
 
 export const ZONES = [
@@ -459,6 +460,19 @@ export const WALLS = [
 ];
 
 export const FIRE_ZONES = {
+  elevator: {
+    label: "Elevator Area Fire",
+    blockedNodes: ["EXIT_UL_ELEV", "EXIT_UR_ELEV", "UC_L0", "UC_R0", "ENTRANCE", "LH3_DL", "LH3_DR"],
+    blockedEdges: [
+      { from: "EXIT_UL_ELEV", to: "UC_L0" },
+      { from: "EXIT_UR_ELEV", to: "UC_R0" },
+      { from: "UC_L0", to: "UC_T1" },
+      { from: "UC_L0", to: "UC_L1" },
+      { from: "UC_L3", to: "ENTRANCE" },
+      { from: "UC_L3", to: "LH3_DL" },
+      { from: "UC_R3", to: "LH3_DR" },
+    ],
+  },
   entrance: {
     label: "Entrance Stairs Fire",
     blockedNodes: ["ENTRANCE"],
