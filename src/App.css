@@ -549,6 +549,7 @@ body {
   gap: 6px;
   transition: all 0.2s ease;
   white-space: nowrap;
+  margin-bottom: 30px;
 }
 
 .vibration-guide:hover { background: rgba(255, 255, 255, 0.1);
@@ -678,6 +679,7 @@ body {
     font-size: 1.1rem;
     font-weight: 900;
     border: none;
+    margin-bottom: 30px;
   }
   
   .fab-settings {
@@ -694,6 +696,7 @@ body {
     justify-content: center;
     cursor: pointer;
     font-size: 1.5rem;
+    margin-bottom: 30px;
   }
 
   .fab-settings span {
