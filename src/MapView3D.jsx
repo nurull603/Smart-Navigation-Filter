@@ -1838,7 +1838,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
             {currentPath && (
               <button onClick={demoRunning ? stopDemoWalk : () => startDemoWalk()}
                 style={{background: demoRunning ? 'rgba(255,180,0,0.85)' : 'rgba(0,180,100,0.85)', color:'#fff', border:'none', borderRadius:20, padding:'6px 12px', fontSize:'0.75rem'}}>
-                {demoRunning ? '⏹ Stop' : '▶ Demo'}
+                {'Start'}
               </button>
             )}
             <button onClick={() => { stopDemoWalk(); clearAll(); }} style={{background:'rgba(255,255,255,0.15)',color:'#fff',border:'none',borderRadius:20,padding:'6px 12px',fontSize:'0.75rem'}}>
