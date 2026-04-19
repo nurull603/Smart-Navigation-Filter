@@ -1,0 +1,14 @@
+FIREBASE HOSTING
+
+npm run build
+firebase deploy --only hosting
+
+
+fOR ANDROID
+npm run build
+npx cap sync android
+
+
+fire detector commands
+python fire_detector_julio.py
+
