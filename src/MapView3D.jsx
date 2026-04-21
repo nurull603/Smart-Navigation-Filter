@@ -833,20 +833,19 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
 
   // RSSI smoothing — responsive for large building with spread-out beacons
   const smoothRSSI = (beaconId, rawRSSI) => {
-    const prev = beaconSmoothed.current[beaconId];
-    if (prev === undefined) {
-      beaconSmoothed.current[beaconId] = rawRSSI;
-      return rawRSSI;
-    }
+  const prev = beaconSmoothed.current[beaconId];
+  if (prev === undefined) {
+    beaconSmoothed.current[beaconId] = rawRSSI;
+    return rawRSSI;
+  }
 
-    // Fast when close to beacon or big change, moderate otherwise
-    const diff = Math.abs(rawRSSI - prev);
-    const isClose = rawRSSI > -55;
-    const alpha = (isClose || diff > 12) ? 0.2 : 0.1;
+  // Use a very small alpha (0.05) for high-frequency 100ms data
+  // This heavily dampens the "trash hardware" noise
+  const alpha = 0.05; 
 
-    beaconSmoothed.current[beaconId] = alpha * rawRSSI + (1 - alpha) * prev;
-    return beaconSmoothed.current[beaconId];
-  };
+  beaconSmoothed.current[beaconId] = alpha * rawRSSI + (1 - alpha) * prev;
+  return beaconSmoothed.current[beaconId];
+};
 
   // Demo Map — Jersey Mike's Arena, inverted-L shape
   // BEACON_1 (minor 4953) = bottom/table, BEACON_2 (minor 4951) = mid vertical, BEACON_3 (minor 4950) = exit
@@ -931,12 +930,14 @@ const lastSnappedBeacon = useRef(null);
 
 const updateBeaconPosition = useCallback(() => {
   const now = Date.now();
+  const HYSTERESIS_MARGIN = 6; // Requires a 6dBm lead to switch beacons
+  const SNAP_THRESHOLD = -65;  // Only snap if signal is better than -65
 
-  // Gather all active beacons
+  // 1. Gather beacons seen in the last 3 seconds
   const active = [];
   for (const bid of BEACON_ORDER) {
     const data = beaconRSSI.current[bid];
-    if (data && now - data.timestamp < 12000) {
+    if (data && now - data.timestamp < 3000) {
       active.push({
         id: bid,
         rssi: beaconSmoothed.current[bid] || data.rssi,
@@ -949,48 +950,48 @@ const updateBeaconPosition = useCallback(() => {
 
   if (active.length === 0) return;
 
-  // Find current snapped beacon index
+  // 2. Identify where we are currently
   const currentIdx = lastSnappedBeacon.current 
     ? BEACON_ORDER.indexOf(lastSnappedBeacon.current)
     : -1;
 
-  // Only consider beacons within 1 step of current position
+  // 3. Find the strongest candidate among logically ADJACENT beacons
+  // (Prevents jumping from Beacon 1 to Beacon 4 instantly)
   const candidates = active.filter(b => {
-    if (currentIdx === -1) return true; // no position yet, allow any
+    if (currentIdx === -1) return true; // First lock-on allows any beacon
     const diff = Math.abs(b.orderIdx - currentIdx);
-    return diff <= 1; // only current beacon and immediate neighbors
+    return diff <= 1; // Only allow current beacon or its immediate neighbors
   });
 
   if (candidates.length === 0) return;
 
-  // Find strongest signal among candidates
   candidates.sort((a, b) => b.rssi - a.rssi);
   const strongest = candidates[0];
 
-  // Only snap if signal is strong enough (-65 or better)
-  if (strongest.rssi <= SNAP_THRESHOLD) {
-    // Strong enough — snap to this beacon
-    const node = NODES.find(n => n.id === strongest.nodeId);
-    if (node) {
-      targetDotPos.current = { x: node.x, y: node.y };
-      if (!blueDotRef.current) createBlueDot(node.x, node.y);
-      lastSnappedBeacon.current = strongest.id;
+  // 4. Check if we should actually move
+  const currentRSSI = lastSnappedBeacon.current 
+    ? (beaconSmoothed.current[lastSnappedBeacon.current] || -100) 
+    : -100;
 
-      // Update current location
-      if (strongest.nodeId !== currentBeaconRef.current) {
-        currentBeaconRef.current = strongest.nodeId;
-        setCurrentBeaconNode(strongest.nodeId);
-        if (onLocationUpdate) onLocationUpdate(strongest.nodeId);
-        if (!currentPath) setSelectedStart(strongest.nodeId);
-        addLog('SNAPPED to ' + strongest.label);
+  if (strongest.rssi > SNAP_THRESHOLD) {
+    // Only switch if the same beacon OR new beacon is significantly stronger
+    if (strongest.id === lastSnappedBeacon.current || strongest.rssi > (currentRSSI + HYSTERESIS_MARGIN)) {
+      const node = NODES.find(n => n.id === strongest.nodeId);
+      if (node) {
+        targetDotPos.current = { x: node.x, y: node.y };
+        if (!blueDotRef.current) createBlueDot(node.x, node.y);
+        
+        if (strongest.id !== lastSnappedBeacon.current) {
+          lastSnappedBeacon.current = strongest.id;
+          setCurrentBeaconNode(strongest.nodeId);
+          if (onLocationUpdate) onLocationUpdate(strongest.nodeId);
+          addLog('SWITCHED to ' + strongest.label);
+        }
         setBleDebug(strongest.label + ': ' + strongest.rssi.toFixed(0) + ' dBm ✓');
       }
     }
-  } else {
-    // Signal too weak — stay where we are, just update debug
-    setBleDebug('Waiting... strongest: ' + strongest.label.split('—')[1]?.trim() + ' ' + strongest.rssi.toFixed(0) + ' dBm');
   }
-}, [addLog]);
+}, [addLog, onLocationUpdate]);
 
   const bleScanAbortRef = useRef(null);
   const bleListenerRef = useRef(null);
