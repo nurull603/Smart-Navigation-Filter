@@ -751,7 +751,22 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
         camera.position.set(cx, cy, cz);
         camera.lookAt(ctrl.panX, 0, ctrl.panZ);
       }
-
+// --- ANIMATION FOR BEACON NODES ---
+      nodeVisualsRef.current.forEach((visual, index) => {
+        const node = NODES[index];
+        // currentBeaconRef is a ref that tracks your current location
+        if (node.id === currentBeaconRef.current) {
+          // Pulse effect: makes the active node grow and shrink slightly
+          const pulse = 1 + Math.sin(Date.now() * 0.005) * 0.2;
+          visual.scale.set(2.2 * pulse, 2.2 * pulse, 2.2 * pulse);
+          visual.material.emissiveIntensity = 1.5; // Make it glow
+        } else {
+          // Reset all other nodes to normal size
+          visual.scale.set(1, 1, 1);
+          visual.material.emissiveIntensity = 0.5;
+        }
+      });
+      
       renderer.render(scene, camera);
     };
     animate();
@@ -929,8 +944,9 @@ const lastSnappedBeacon = useRef(null);
 
 const updateBeaconPosition = useCallback(() => {
   const now = Date.now();
-  const HYSTERESIS_MARGIN = 6; // Requires a 6dBm lead to switch beacons
-  const SNAP_THRESHOLD = -65;  // Only snap if signal is better than -65
+  // CHANGE THESE TWO LINES:
+  const HYSTERESIS_MARGIN = 3; // Was 6. Lowering this makes the dot less "sticky."
+  const SNAP_THRESHOLD = -78;  // Was -65. This lets the app "see" you from further away.
 
   // 1. Gather beacons seen in the last 3 seconds
   const active = [];
