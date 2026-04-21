@@ -853,25 +853,24 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
   // Horizontal arm: x=5 to x=10, y=0 (corner to exit)
  const BEACON_SEGMENTS = [
   { from: 'BEACON_1', to: 'BEACON_2', waypoints: [
-    { x: -6, y: 32 + (-57 * 1.0) },
-    { x: -6, y: 32 + (-57 * 0.7) },
+    { x: -6, y: -25 },   // Table 122 (Start)
+    { x: -6, y: -7.9 }   // V_MID3
   ]},
   { from: 'BEACON_2', to: 'BEACON_3', waypoints: [
-    { x: -6, y: 32 + (-57 * 0.7) },
-    { x: -6, y: 32 + (-57 * 0.5) },
+    { x: -6, y: -7.9 },
+    { x: -6, y: 3.5 }    // V_MID5 (Middle)
   ]},
   { from: 'BEACON_3', to: 'BEACON_4', waypoints: [
-    { x: -6, y: 32 + (-57 * 0.5) },
-    { x: -6, y: 32 + (-57 * 0.3) },
+    { x: -6, y: 3.5 },
+    { x: -6, y: 14.9 }   // V_MID7
   ]},
   { from: 'BEACON_4', to: 'BEACON_5', waypoints: [
-    { x: -6, y: 32 + (-57 * 0.3) },
-    { x: -6, y: 32 },
+    { x: -6, y: 14.9 },
+    { x: -6, y: 32 }     // Corner Junction (Turning Point)
   ]},
   { from: 'BEACON_5', to: 'BEACON_6', waypoints: [
-    { x: -6, y: 32 },
-    { x: -6 - 7.5, y: 32 },
-    { x: -6 - 15,  y: 32 },
+    { x: -6, y: 32 },    // Corner
+    { x: -21, y: 32 }    // Main Exit (Left from corner)
   ]},
 ];
 const BEACON_ORDER = ['BEACON_1', 'BEACON_2', 'BEACON_3', 'BEACON_4', 'BEACON_5', 'BEACON_6'];
