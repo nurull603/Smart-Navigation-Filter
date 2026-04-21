@@ -613,7 +613,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
     });
 
     // --- WALLS ---
-    const wallHeight = 3.0;
+    const wallHeight = 1.5;
     const wallThickness = 0.25;
     const wallMat = new THREE.MeshStandardMaterial({ color: 0xc0c8d4, roughness: 0.4, metalness: 0.1 });
 
@@ -1398,11 +1398,11 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
     const curve = new THREE.CatmullRomCurve3(points, false, 'catmullrom', 0.2);
 
     // Main tube
-    const tubeGeo = new THREE.TubeGeometry(curve, points.length * 8, 0.25, 8, false);
-    const tubeMat = new THREE.MeshStandardMaterial({
-      color: 0x3388ff, emissive: 0x2266cc, emissiveIntensity: 0.6,
-      roughness: 0.3, transparent: true, opacity: 0.85,
-    });
+    const tubeGeo = new THREE.TubeGeometry(curve, points.length * 8, 0.6, 8, false);
+const tubeMat = new THREE.MeshStandardMaterial({
+  color: 0x00aaff, emissive: 0x00aaff, emissiveIntensity: 2.0,
+  roughness: 0.0, transparent: true, opacity: 1.0,
+});
     routeGroup.add(new THREE.Mesh(tubeGeo, tubeMat));
 
     // Glow tube
@@ -1599,7 +1599,8 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
               const dirs = generateVoiceDirections(result.path, NODES);
               setDirections(dirs);
               setCurrentStep(0);
-              if (voiceEnabled) speak('Fire detected near ' + (zone?.label || data.zone) + '. Follow the blue path to safety.');
+              // safety audio after fire detected
+              if (voiceEnabled) speak('Fire detected near corner. Follow Julios orders to safety, he knows the way, trust. in julio i trust');
               if (vibrationEnabled) vibrateEmergency();
               startDemoWalk(result.path);
             }
