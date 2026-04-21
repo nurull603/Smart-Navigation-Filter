@@ -999,6 +999,10 @@ const updateBeaconPosition = useCallback(() => {
         if (strongest.id !== lastSnappedBeacon.current) {
           lastSnappedBeacon.current = strongest.id;
           setCurrentBeaconNode(strongest.nodeId);
+          
+          // AUTO-SELECT START: This links your scan to the evacuation logic
+          setSelectedStart(strongest.nodeId); 
+
           if (onLocationUpdate) onLocationUpdate(strongest.nodeId);
           addLog('SWITCHED to ' + strongest.label);
         }
