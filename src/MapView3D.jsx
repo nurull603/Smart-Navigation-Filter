@@ -851,26 +851,26 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
   // BEACON_1 (minor 4953) = bottom/table, BEACON_2 (minor 4951) = mid vertical, BEACON_3 (minor 4950) = exit
   // Vertical arm: x=5, y=15 (bottom) to y=0 (top/corner)
   // Horizontal arm: x=5 to x=10, y=0 (corner to exit)
- const BEACON_SEGMENTS = [
+const BEACON_SEGMENTS = [
   { from: 'BEACON_1', to: 'BEACON_2', waypoints: [
-    { x: -6, y: -25 },   // Table 122 (Start)
-    { x: -6, y: -7.9 }   // V_MID3
+    { x: -6, y: 32 + (-57 * 1.0) }, // Table 122 (Start)
+    { x: -6, y: 32 + (-57 * 0.3) }, // V_MID3 (Stop 2)
   ]},
   { from: 'BEACON_2', to: 'BEACON_3', waypoints: [
-    { x: -6, y: -7.9 },
-    { x: -6, y: 3.5 }    // V_MID5 (Middle)
+    { x: -6, y: 32 + (-57 * 0.3) }, // V_MID3
+    { x: -6, y: 32 + (-57 * 0.5) }, // V_MID5 (Stop 3)
   ]},
   { from: 'BEACON_3', to: 'BEACON_4', waypoints: [
-    { x: -6, y: 3.5 },
-    { x: -6, y: 14.9 }   // V_MID7
+    { x: -6, y: 32 + (-57 * 0.5) }, // V_MID5
+    { x: -6, y: 32 + (-57 * 0.7) }, // V_MID7 (Stop 4)
   ]},
   { from: 'BEACON_4', to: 'BEACON_5', waypoints: [
-    { x: -6, y: 14.9 },
-    { x: -6, y: 32 }     // Corner Junction (Turning Point)
+    { x: -6, y: 32 + (-57 * 0.7) }, // V_MID7
+    { x: -6, y: 32 },               // Corner (Stop 5)
   ]},
   { from: 'BEACON_5', to: 'BEACON_6', waypoints: [
-    { x: -6, y: 32 },    // Corner
-    { x: -21, y: 32 }    // Main Exit (Left from corner)
+    { x: -6, y: 32 },               // Corner
+    { x: -6 - 15, y: 32 }           // Exit (Stop 6)
   ]},
 ];
 const BEACON_ORDER = ['BEACON_1', 'BEACON_2', 'BEACON_3', 'BEACON_4', 'BEACON_5', 'BEACON_6'];
@@ -1311,35 +1311,54 @@ const updateBeaconPosition = useCallback(() => {
 
     if (!showNodes) return;
 
-    NODES.forEach(node => {
-      const isSmall = node.type === 'intersection' || node.type === 'door';
-      const visualRadius = isSmall ? 0.3 : 0.5;
-      // Beacon nodes get purple, others keep their type color
-const beaconNode = BEACONS.find(b => b.nodeId === node.id);
-const isSpecial = node.type === 'refuge' || node.type === 'exit';
-const color = (beaconNode && !isSpecial)
-  ? 0x9b30ff  // purple for middle beacon nodes only
-  : (NODE_COLORS_HEX[node.type] || 0x888888);
+    // 1. Define the rainbow palette for debugging
+const BEACON_COLORS = [
+  0xff0000, // Red (Beacon 1)
+  0xff7f00, // Orange (Beacon 2)
+  0xffff00, // Yellow (Beacon 3)
+  0x00ff00, // Green (Beacon 4)
+  0x0000ff, // Blue (Beacon 5)
+  0x4b0082  // Purple (Beacon 6)
+];
 
-      // Visible sphere
-      const geo = new THREE.SphereGeometry(visualRadius, 12, 8);
-      const mat = new THREE.MeshStandardMaterial({
-        color, emissive: color, emissiveIntensity: 0.3, roughness: 0.4,
-      });
-      const visual = new THREE.Mesh(geo, mat);
-      visual.position.set(node.x, 0.4, -node.y);
-      scene.add(visual);
-      nodeVisualsRef.current.push(visual);
+NODES.forEach(node => {
+  const isSmall = node.type === 'intersection' || node.type === 'door';
+  const visualRadius = isSmall ? 0.3 : 0.5;
 
-      // Invisible hit sphere (bigger, easier to click)
-      const hitGeo = new THREE.SphereGeometry(1.2, 8, 6);
-      const hitMat = new THREE.MeshBasicMaterial({ visible: false });
-      const hitMesh = new THREE.Mesh(hitGeo, hitMat);
-      hitMesh.position.set(node.x, 0.4, -node.y);
-      hitMesh.userData = { nodeId: node.id };
-      scene.add(hitMesh);
-      nodeMeshesRef.current.push(hitMesh);
-    });
+  // 2. Check which beacon is assigned to this node
+  const beaconIdx = BEACONS.findIndex(b => b.nodeId === node.id);
+  
+  let color;
+  if (beaconIdx !== -1) {
+    // Beacon nodes get the rainbow color based on their order in buildingData.js
+    color = BEACON_COLORS[beaconIdx % BEACON_COLORS.length];
+  } else {
+    // Others keep standard colors (Red for exits, Green for refuge)
+    color = NODE_COLORS_HEX[node.type] || 0x888888;
+  }
+
+  // 3. Visible sphere
+  const geo = new THREE.SphereGeometry(visualRadius, 12, 8);
+  const mat = new THREE.MeshStandardMaterial({
+    color, 
+    emissive: color, 
+    emissiveIntensity: 0.5, 
+    roughness: 0.4,
+  });
+  const visual = new THREE.Mesh(geo, mat);
+  visual.position.set(node.x, 0.4, -node.y);
+  scene.add(visual);
+  nodeVisualsRef.current.push(visual);
+
+  // 4. Invisible hit sphere (for clicking/tapping)
+  const hitGeo = new THREE.SphereGeometry(1.2, 8, 6);
+  const hitMat = new THREE.MeshBasicMaterial({ visible: false });
+  const hitMesh = new THREE.Mesh(hitGeo, hitMat);
+  hitMesh.position.set(node.x, 0.4, -node.y);
+  hitMesh.userData = { nodeId: node.id };
+  scene.add(hitMesh);
+  nodeMeshesRef.current.push(hitMesh);
+});
   }, [showNodes]);
 
   // ============================================================
