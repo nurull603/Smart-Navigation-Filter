@@ -854,19 +854,28 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
   // Horizontal arm: x=5 to x=10, y=0 (corner to exit)
  const BEACON_SEGMENTS = [
   { from: 'BEACON_1', to: 'BEACON_2', waypoints: [
-    { x: -6, y: 32 + (-57 * 1.0) },   // TABLE_122
-    { x: -6, y: 32 + (-57 * 0.75) },
-    { x: -6, y: 32 + (-57 * 0.5) },   // V_MID5
+    { x: -6, y: 32 + (-57 * 1.0) },
+    { x: -6, y: 32 + (-57 * 0.7) },
   ]},
   { from: 'BEACON_2', to: 'BEACON_3', waypoints: [
-    { x: -6, y: 32 + (-57 * 0.5) },   // V_MID5
-    { x: -6, y: 32 + (-57 * 0.25) },
-    { x: -6, y: 32 },                  // CORNER
-    { x: -6 - (15 * 0.5), y: 32 },    // H_MID
-    { x: -6 - 15, y: 32 },            // EXIT_MAIN
+    { x: -6, y: 32 + (-57 * 0.7) },
+    { x: -6, y: 32 + (-57 * 0.5) },
+  ]},
+  { from: 'BEACON_3', to: 'BEACON_4', waypoints: [
+    { x: -6, y: 32 + (-57 * 0.5) },
+    { x: -6, y: 32 + (-57 * 0.3) },
+  ]},
+  { from: 'BEACON_4', to: 'BEACON_5', waypoints: [
+    { x: -6, y: 32 + (-57 * 0.3) },
+    { x: -6, y: 32 },
+  ]},
+  { from: 'BEACON_5', to: 'BEACON_6', waypoints: [
+    { x: -6, y: 32 },
+    { x: -6 - 7.5, y: 32 },
+    { x: -6 - 15,  y: 32 },
   ]},
 ];
-  const BEACON_ORDER = ['BEACON_1', 'BEACON_2', 'BEACON_3'];
+const BEACON_ORDER = ['BEACON_1', 'BEACON_2', 'BEACON_3', 'BEACON_4', 'BEACON_5', 'BEACON_6'];
 
   // Interpolate position along a segment's waypoints
   const getSegmentPosition = (segment, ratio) => {
@@ -917,114 +926,71 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
   };
 
   // Determine position from RSSI of up to 4 beacons and slide dot along L-path
-  const updateBeaconPosition = useCallback(() => {
-    const now = Date.now();
+  const SNAP_THRESHOLD = -65; // dBm — if beacon hits this, you're there
+const lastSnappedBeacon = useRef(null);
 
-    // Gather all active beacons with smoothed RSSI
-    const active = [];
-    for (const bid of BEACON_ORDER) {
-      const data = beaconRSSI.current[bid];
-      if (data && now - data.timestamp < 12000) {
-        active.push({
-          id: bid,
-          rssi: beaconSmoothed.current[bid] || data.rssi,
-          nodeId: data.nodeId,
-          label: data.label,
-          orderIdx: BEACON_ORDER.indexOf(bid),
-        });
+const updateBeaconPosition = useCallback(() => {
+  const now = Date.now();
+
+  // Gather all active beacons
+  const active = [];
+  for (const bid of BEACON_ORDER) {
+    const data = beaconRSSI.current[bid];
+    if (data && now - data.timestamp < 12000) {
+      active.push({
+        id: bid,
+        rssi: beaconSmoothed.current[bid] || data.rssi,
+        nodeId: data.nodeId,
+        label: data.label,
+        orderIdx: BEACON_ORDER.indexOf(bid),
+      });
+    }
+  }
+
+  if (active.length === 0) return;
+
+  // Find current snapped beacon index
+  const currentIdx = lastSnappedBeacon.current 
+    ? BEACON_ORDER.indexOf(lastSnappedBeacon.current)
+    : -1;
+
+  // Only consider beacons within 1 step of current position
+  const candidates = active.filter(b => {
+    if (currentIdx === -1) return true; // no position yet, allow any
+    const diff = Math.abs(b.orderIdx - currentIdx);
+    return diff <= 1; // only current beacon and immediate neighbors
+  });
+
+  if (candidates.length === 0) return;
+
+  // Find strongest signal among candidates
+  candidates.sort((a, b) => b.rssi - a.rssi);
+  const strongest = candidates[0];
+
+  // Only snap if signal is strong enough (-65 or better)
+  if (strongest.rssi <= SNAP_THRESHOLD) {
+    // Strong enough — snap to this beacon
+    const node = NODES.find(n => n.id === strongest.nodeId);
+    if (node) {
+      targetDotPos.current = { x: node.x, y: node.y };
+      if (!blueDotRef.current) createBlueDot(node.x, node.y);
+      lastSnappedBeacon.current = strongest.id;
+
+      // Update current location
+      if (strongest.nodeId !== currentBeaconRef.current) {
+        currentBeaconRef.current = strongest.nodeId;
+        setCurrentBeaconNode(strongest.nodeId);
+        if (onLocationUpdate) onLocationUpdate(strongest.nodeId);
+        if (!currentPath) setSelectedStart(strongest.nodeId);
+        addLog('SNAPPED to ' + strongest.label);
+        setBleDebug(strongest.label + ': ' + strongest.rssi.toFixed(0) + ' dBm ✓');
       }
     }
-
-    if (active.length === 0) return;
-
-    // Sort by signal strength (strongest first)
-    active.sort((a, b) => b.rssi - a.rssi);
-
-    // Only switch dominant beacon if 8dBm stronger than current
-if (active.length >= 2) {
-  const diff = active[0].rssi - active[1].rssi;
-  if (diff < 8) active[0] = active[1]; // keep previous dominant
-}
-
-    let pos;
-    let nearestNodeId;
-    let nearestLabel;
-
-    if (active.length === 1) {
-      // Only one beacon — place at that beacon's node
-      const b = active[0];
-      const node = NODES.find(n => n.id === b.nodeId);
-      if (node) {
-        pos = { x: node.x, y: node.y };
-        nearestNodeId = b.nodeId;
-        nearestLabel = b.label;
-      }
-    } else {
-      // Find the two strongest beacons
-      const b1 = active[0];
-      const b2 = active[1];
-
-      // Find a segment connecting these two beacons
-      const seg = BEACON_SEGMENTS.find(s =>
-        (s.from === b1.id && s.to === b2.id) || (s.from === b2.id && s.to === b1.id)
-      );
-
-      if (seg) {
-        // Connected beacons — interpolate along segment
-        const fromBeacon = seg.from === b1.id ? b1 : b2;
-        const toBeacon = seg.to === b1.id ? b1 : b2;
-
-        // ratio: 0 = at "from" beacon, 1 = at "to" beacon
-        const diff = toBeacon.rssi - fromBeacon.rssi;
-        const ratio = Math.max(0, Math.min(1, 0.5 + (diff / 50)));
-        pos = getSegmentPosition(seg, ratio);
-
-        // Determine nearest beacon for voice
-        if (ratio < 0.35) {
-          nearestNodeId = fromBeacon.nodeId;
-          nearestLabel = fromBeacon.label;
-        } else if (ratio > 0.65) {
-          nearestNodeId = toBeacon.nodeId;
-          nearestLabel = toBeacon.label;
-        }
-
-        setBleDebug(fromBeacon.label.split('—')[1]?.trim() + ': ' + fromBeacon.rssi.toFixed(0) +
-          ' | ' + toBeacon.label.split('—')[1]?.trim() + ': ' + toBeacon.rssi.toFixed(0) +
-          ' | pos: ' + (ratio * 100).toFixed(0) + '%');
-      } else {
-        // Not adjacent — use strongest beacon position
-        const node = NODES.find(n => n.id === b1.nodeId);
-        if (node) {
-          pos = { x: node.x, y: node.y };
-          nearestNodeId = b1.nodeId;
-          nearestLabel = b1.label;
-        }
-      }
-    }
-
-    if (pos) {
-      targetDotPos.current = pos;
-      interpolatedPos.current = pos;
-      // Don't move dot here — animation loop handles smooth movement
-      // Just ensure dot exists
-      if (!blueDotRef.current) createBlueDot(pos.x, pos.y);
-    }
-
-    // Announce room change (with 5 second cooldown to prevent spam)
-    if (nearestNodeId && nearestNodeId !== currentBeaconRef.current) {
-      currentBeaconRef.current = nearestNodeId;
-      setCurrentBeaconNode(nearestNodeId);
-      if (onLocationUpdate) onLocationUpdate(nearestNodeId);
-      // Only set start if no active route
-      if (!currentPath) {
-        setSelectedStart(nearestNodeId);
-      }
-      const shortLabel = nearestLabel?.split('—')[1]?.trim() || nearestLabel || nearestNodeId;
-      const now = Date.now();
-      // Voice removed — blue dot moving is the feedback
-      addLog('MOVED to ' + shortLabel);
-    }
-  }, [addLog]);
+  } else {
+    // Signal too weak — stay where we are, just update debug
+    setBleDebug('Waiting... strongest: ' + strongest.label.split('—')[1]?.trim() + ' ' + strongest.rssi.toFixed(0) + ' dBm');
+  }
+}, [addLog]);
 
   const bleScanAbortRef = useRef(null);
   const bleListenerRef = useRef(null);
@@ -1348,7 +1314,12 @@ if (active.length >= 2) {
     NODES.forEach(node => {
       const isSmall = node.type === 'intersection' || node.type === 'door';
       const visualRadius = isSmall ? 0.3 : 0.5;
-      const color = NODE_COLORS_HEX[node.type] || 0x888888;
+      // Beacon nodes get purple, others keep their type color
+const beaconNode = BEACONS.find(b => b.nodeId === node.id);
+const isSpecial = node.type === 'refuge' || node.type === 'exit';
+const color = (beaconNode && !isSpecial)
+  ? 0x9b30ff  // purple for middle beacon nodes only
+  : (NODE_COLORS_HEX[node.type] || 0x888888);
 
       // Visible sphere
       const geo = new THREE.SphereGeometry(visualRadius, 12, 8);

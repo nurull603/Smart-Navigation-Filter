@@ -61,9 +61,12 @@ export const EDGES = [
 ];
 
 export const BEACONS = [
-  { id: "BEACON_1", major: 3838, minor: 4953, nodeId: "TABLE_122", label: "Beacon 1 — Table 122" },
-  { id: "BEACON_2", major: 3838, minor: 4951, nodeId: "V_MID5",    label: "Beacon 2 — Aisle Center" },
-  { id: "BEACON_3", major: 3838, minor: 4950, nodeId: "EXIT_MAIN", label: "Beacon 3 — Main Exit" },
+  { id: "BEACON_1", major: 3838, minor: 4949, nodeId: "TABLE_122", label: "Beacon 1 — Table 122" },
+  { id: "BEACON_2", major: 3838, minor: 4950, nodeId: "V_MID3",    label: "Beacon 2 — Aisle 3" },
+  { id: "BEACON_3", major: 3838, minor: 4951, nodeId: "V_MID5",    label: "Beacon 3 — Aisle 5" },
+  { id: "BEACON_4", major: 3838, minor: 4952, nodeId: "V_MID7",    label: "Beacon 4 — Aisle 7" },
+  { id: "BEACON_5", major: 3838, minor: 4953, nodeId: "CORNER",    label: "Beacon 5 — Corner" },
+  { id: "BEACON_6", major: 3838, minor: 4954, nodeId: "EXIT_MAIN", label: "Beacon 6 — Exit" },
 ];
 
 export const ZONES = [
