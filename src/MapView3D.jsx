@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { BUILDING, NODES, EDGES, ZONES, CORRIDORS, WALLS, BEACONS, FIRE_ZONES } from './data/buildingData';
 import { dijkstra, findNearestExit } from './pathfinding';
 // Firebase imports (for future Pi camera fire detection)
@@ -498,6 +499,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     mount.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
@@ -523,6 +525,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
     scene.add(fillLight);
 
     // --- GROUND (dark exterior) ---
+    /*
     const groundGeo = new THREE.PlaneGeometry(200, 200);
     const groundMat = new THREE.MeshStandardMaterial({ color: 0x0e1018, roughness: 0.9 });
     const ground = new THREE.Mesh(groundGeo, groundMat);
@@ -530,7 +533,28 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
     ground.position.y = -0.05;
     ground.receiveShadow = true;
     scene.add(ground);
-
+    */
+   
+    // --- JERSEY MIKE'S ARENA GLB MODEL ---
+    const loader = new GLTFLoader();
+    loader.load('/JM.glb', (gltf) => {
+      const model = gltf.scene;
+      // Scale and center the model to match our coordinate system
+      // Adjust these values if the model appears too big/small or off-center
+      model.scale.set(1, 1, 1);
+      model.position.set(5, 0.05, -7);
+      model.rotation.y = 0;
+      model.traverse((child) => {
+        if (child.isMesh) {
+          child.receiveShadow = true;
+          child.castShadow = true;
+        }
+      });
+      scene.add(model);
+    }, undefined, (err) => {
+      console.warn('GLB load error:', err);
+    });
+/*
     // --- BUILDING FLOOR ---
     const floorGeo = new THREE.PlaneGeometry(BUILDING.width, BUILDING.height);
     const floorMat = new THREE.MeshStandardMaterial({ color: 0x1e2230, roughness: 0.7 });
@@ -539,7 +563,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
     floor.position.set(0, 0, 0);
     floor.receiveShadow = true;
     scene.add(floor);
-
+*/
     // --- CORRIDORS ---
     CORRIDORS.forEach(c => {
       const geo = new THREE.PlaneGeometry(c.w, c.h);
@@ -825,42 +849,26 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
     return beaconSmoothed.current[beaconId];
   };
 
-  // Tillet Building — 7 beacons, L-shaped layout
-  // Tillet L-shape: Upper U + 214ft corridor + Lower U (1 unit = 4 feet)
-  // B1=UC_T3(16,1.25), B2=UC_L2(27.5,9), B3=CONN_Q2(2,40), B4=LT_MID(14.5,66.5), B5=LL_3(27,78.5), B6=LB_3(15,96.5), B7=LR_3(2,84.5)
+  // Demo Map — Jersey Mike's Arena, inverted-L shape
+  // BEACON_1 (minor 4953) = bottom/table, BEACON_2 (minor 4951) = mid vertical, BEACON_3 (minor 4950) = exit
+  // Vertical arm: x=5, y=15 (bottom) to y=0 (top/corner)
+  // Horizontal arm: x=5 to x=10, y=0 (corner to exit)
   const BEACON_SEGMENTS = [
-    { from: 'BEACON_2', to: 'BEACON_1', waypoints: [  // Upper left bay → Top center
-      { x: 27.5, y: 9 }, { x: 27.5, y: 5 }, { x: 27.5, y: 1.25 }, { x: 24, y: 1.25 }, { x: 20, y: 1.25 }, { x: 16, y: 1.25 },
+    { from: 'BEACON_1', to: 'BEACON_2', waypoints: [  // Table (bottom) → Mid vertical
+      { x: 5, y: 15 },
+      { x: 5, y: 11.25 },
+      { x: 5, y: 7.5 },
     ]},
-    { from: 'BEACON_1', to: 'BEACON_3', waypoints: [  // Top center → right bay → down 214ft corridor
-      { x: 16, y: 1.25 }, { x: 12, y: 1.25 }, { x: 8, y: 1.25 }, { x: 4, y: 1.25 }, { x: 2, y: 1.25 },
-      { x: 2, y: 5 }, { x: 2, y: 9 }, { x: 2, y: 13 }, { x: 2, y: 21 }, { x: 2, y: 29 }, { x: 2, y: 37 }, { x: 2, y: 40 },
-    ]},
-    { from: 'BEACON_3', to: 'BEACON_4', waypoints: [  // Corridor mid → lower top bar
-      { x: 2, y: 40 }, { x: 2, y: 48 }, { x: 2, y: 56 }, { x: 2, y: 66.5 },
-      { x: 6.5, y: 66.5 }, { x: 10.5, y: 66.5 }, { x: 14.5, y: 66.5 },
-    ]},
-    { from: 'BEACON_4', to: 'BEACON_5', waypoints: [  // Lower top bar → left leg
-      { x: 14.5, y: 66.5 }, { x: 18.5, y: 66.5 }, { x: 22.5, y: 66.5 }, { x: 27, y: 66.5 },
-      { x: 27, y: 70.5 }, { x: 27, y: 74.5 }, { x: 27, y: 78.5 },
-    ]},
-    { from: 'BEACON_5', to: 'BEACON_6', waypoints: [  // Left leg → bottom bar
-      { x: 27, y: 78.5 }, { x: 27, y: 82.5 }, { x: 27, y: 86.5 }, { x: 27, y: 90.5 }, { x: 27, y: 96.5 },
-      { x: 23, y: 96.5 }, { x: 19, y: 96.5 }, { x: 15, y: 96.5 },
-    ]},
-    { from: 'BEACON_6', to: 'BEACON_4', waypoints: [  // Bottom bar → right leg → lower top (close loop)
-      { x: 15, y: 96.5 }, { x: 11, y: 96.5 }, { x: 6.5, y: 96.5 }, { x: 2, y: 96.5 },
-      { x: 2, y: 88.5 }, { x: 2, y: 80.5 }, { x: 2, y: 72.5 },
-      { x: 2, y: 66.5 }, { x: 6.5, y: 66.5 }, { x: 10.5, y: 66.5 }, { x: 14.5, y: 66.5 },
-    ]},
-    { from: 'BEACON_6', to: 'BEACON_3', waypoints: [  // Bottom bar → right leg → corridor
-      { x: 15, y: 96.5 }, { x: 11, y: 96.5 }, { x: 6.5, y: 96.5 }, { x: 2, y: 96.5 },
-      { x: 2, y: 88.5 }, { x: 2, y: 80.5 }, { x: 2, y: 72.5 },
-      { x: 2, y: 66.5 }, { x: 2, y: 60 }, { x: 2, y: 52 }, { x: 2, y: 44 }, { x: 2, y: 40 },
+    { from: 'BEACON_2', to: 'BEACON_3', waypoints: [  // Mid vertical → Corner → Exit
+      { x: 5, y: 7.5 },
+      { x: 5, y: 3.75 },
+      { x: 5, y: 0 },
+      { x: 7.5, y: 0 },
+      { x: 10, y: 0 },
     ]},
   ];
 
-  const BEACON_ORDER = ['BEACON_2', 'BEACON_1', 'BEACON_3', 'BEACON_4', 'BEACON_5', 'BEACON_6'];
+  const BEACON_ORDER = ['BEACON_1', 'BEACON_2', 'BEACON_3'];
 
   // Interpolate position along a segment's waypoints
   const getSegmentPosition = (segment, ratio) => {
