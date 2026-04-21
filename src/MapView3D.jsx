@@ -690,7 +690,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
         const dist = Math.sqrt(dx * dx + dz * dz);
 
         // Max speed: 0.35 units per frame — fast enough for large dorm hallways
-        const maxStep = 0.35;
+        const maxStep = 0.15;
         let newX, newZ;
         if (dist < maxStep) {
           // Close enough — snap to target
@@ -842,7 +842,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
     // Fast when close to beacon or big change, moderate otherwise
     const diff = Math.abs(rawRSSI - prev);
     const isClose = rawRSSI > -55;
-    const alpha = (isClose || diff > 12) ? 0.4 : 0.25;
+    const alpha = (isClose || diff > 12) ? 0.2 : 0.1;
 
     beaconSmoothed.current[beaconId] = alpha * rawRSSI + (1 - alpha) * prev;
     return beaconSmoothed.current[beaconId];
@@ -852,21 +852,20 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
   // BEACON_1 (minor 4953) = bottom/table, BEACON_2 (minor 4951) = mid vertical, BEACON_3 (minor 4950) = exit
   // Vertical arm: x=5, y=15 (bottom) to y=0 (top/corner)
   // Horizontal arm: x=5 to x=10, y=0 (corner to exit)
-  const BEACON_SEGMENTS = [
-    { from: 'BEACON_1', to: 'BEACON_2', waypoints: [  // Table (bottom) → Mid vertical
-      { x: 5, y: 15 },
-      { x: 5, y: 11.25 },
-      { x: 5, y: 7.5 },
-    ]},
-    { from: 'BEACON_2', to: 'BEACON_3', waypoints: [  // Mid vertical → Corner → Exit
-      { x: 5, y: 7.5 },
-      { x: 5, y: 3.75 },
-      { x: 5, y: 0 },
-      { x: 7.5, y: 0 },
-      { x: 10, y: 0 },
-    ]},
-  ];
-
+ const BEACON_SEGMENTS = [
+  { from: 'BEACON_1', to: 'BEACON_2', waypoints: [
+    { x: -6, y: 32 + (-57 * 1.0) },   // TABLE_122
+    { x: -6, y: 32 + (-57 * 0.75) },
+    { x: -6, y: 32 + (-57 * 0.5) },   // V_MID5
+  ]},
+  { from: 'BEACON_2', to: 'BEACON_3', waypoints: [
+    { x: -6, y: 32 + (-57 * 0.5) },   // V_MID5
+    { x: -6, y: 32 + (-57 * 0.25) },
+    { x: -6, y: 32 },                  // CORNER
+    { x: -6 - (15 * 0.5), y: 32 },    // H_MID
+    { x: -6 - 15, y: 32 },            // EXIT_MAIN
+  ]},
+];
   const BEACON_ORDER = ['BEACON_1', 'BEACON_2', 'BEACON_3'];
 
   // Interpolate position along a segment's waypoints
@@ -940,6 +939,12 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
 
     // Sort by signal strength (strongest first)
     active.sort((a, b) => b.rssi - a.rssi);
+
+    // Only switch dominant beacon if 8dBm stronger than current
+if (active.length >= 2) {
+  const diff = active[0].rssi - active[1].rssi;
+  if (diff < 8) active[0] = active[1]; // keep previous dominant
+}
 
     let pos;
     let nearestNodeId;
