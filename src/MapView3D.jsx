@@ -261,6 +261,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
   const [showVibGuide, setShowVibGuide] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  
 
   const hearingImpaired = profile?.disabilities?.hearingImpaired || false;
 
@@ -942,13 +943,14 @@ const BEACON_ORDER = ['BEACON_1', 'BEACON_2', 'BEACON_3', 'BEACON_4', 'BEACON_5'
   const SNAP_THRESHOLD = -65; // dBm — if beacon hits this, you're there
 const lastSnappedBeacon = useRef(null);
 
+const scanStartTime = useRef(Date.now()); // Add this near your other refs
+
 const updateBeaconPosition = useCallback(() => {
   const now = Date.now();
-  // CHANGE THESE TWO LINES:
-  const HYSTERESIS_MARGIN = 3; // Was 6. Lowering this makes the dot less "sticky."
-  const SNAP_THRESHOLD = -78;  // Was -65. This lets the app "see" you from further away.
+  const HYSTERESIS_MARGIN = 3; 
+  const SNAP_THRESHOLD = -78;
+  const GRACE_PERIOD_MS = 4000; // 4 seconds to "find" the real start
 
-  // 1. Gather beacons seen in the last 3 seconds
   const active = [];
   for (const bid of BEACON_ORDER) {
     const data = beaconRSSI.current[bid];
@@ -964,32 +966,29 @@ const updateBeaconPosition = useCallback(() => {
   }
 
   if (active.length === 0) return;
+  active.sort((a, b) => b.rssi - a.rssi);
+  const strongest = active[0];
 
-  // 2. Identify where we are currently
-  const currentIdx = lastSnappedBeacon.current 
-    ? BEACON_ORDER.indexOf(lastSnappedBeacon.current)
-    : -1;
+  // --- IMPROVED LOGIC: The Grace Period ---
+  const isGracePeriod = (now - scanStartTime.current) < GRACE_PERIOD_MS;
+  const currentIdx = lastSnappedBeacon.current ? BEACON_ORDER.indexOf(lastSnappedBeacon.current) : -1;
+  
+  // Only apply the "No Jumping" rule if we aren't in the grace period
+  // AND the new signal isn't overwhelmingly stronger (e.g., 15dBm better)
+  let canMove = false;
+  if (isGracePeriod || currentIdx === -1) {
+    canMove = true; 
+  } else {
+    const diff = Math.abs(strongest.orderIdx - currentIdx);
+    const isStrongerOverride = strongest.rssi > (beaconSmoothed.current[lastSnappedBeacon.current] + 15);
+    if (diff <= 1 || isStrongerOverride) {
+      canMove = true;
+    }
+  }
 
-  // 3. Find the strongest candidate among logically ADJACENT beacons
-  // (Prevents jumping from Beacon 1 to Beacon 4 instantly)
-  const candidates = active.filter(b => {
-    if (currentIdx === -1) return true; // First lock-on allows any beacon
-    const diff = Math.abs(b.orderIdx - currentIdx);
-    return diff <= 1; // Only allow current beacon or its immediate neighbors
-  });
+  if (canMove && strongest.rssi > SNAP_THRESHOLD) {
+    const currentRSSI = lastSnappedBeacon.current ? (beaconSmoothed.current[lastSnappedBeacon.current] || -100) : -100;
 
-  if (candidates.length === 0) return;
-
-  candidates.sort((a, b) => b.rssi - a.rssi);
-  const strongest = candidates[0];
-
-  // 4. Check if we should actually move
-  const currentRSSI = lastSnappedBeacon.current 
-    ? (beaconSmoothed.current[lastSnappedBeacon.current] || -100) 
-    : -100;
-
-  if (strongest.rssi > SNAP_THRESHOLD) {
-    // Only switch if the same beacon OR new beacon is significantly stronger
     if (strongest.id === lastSnappedBeacon.current || strongest.rssi > (currentRSSI + HYSTERESIS_MARGIN)) {
       const node = NODES.find(n => n.id === strongest.nodeId);
       if (node) {
@@ -999,18 +998,12 @@ const updateBeaconPosition = useCallback(() => {
         if (strongest.id !== lastSnappedBeacon.current) {
           lastSnappedBeacon.current = strongest.id;
           setCurrentBeaconNode(strongest.nodeId);
-          
-          // AUTO-SELECT START: This links your scan to the evacuation logic
-          setSelectedStart(strongest.nodeId); 
-
-          if (onLocationUpdate) onLocationUpdate(strongest.nodeId);
-          addLog('SWITCHED to ' + strongest.label);
+          setSelectedStart(strongest.nodeId); // Links scan to Evacuate start
         }
-        setBleDebug(strongest.label + ': ' + strongest.rssi.toFixed(0) + ' dBm ✓');
       }
     }
   }
-}, [addLog, onLocationUpdate]);
+}, [onLocationUpdate]);
 
   const bleScanAbortRef = useRef(null);
   const bleListenerRef = useRef(null);
@@ -1028,6 +1021,7 @@ const updateBeaconPosition = useCallback(() => {
     }
 
     try {
+      scanStartTime.current = Date.now();
       setBleDebug('Starting scan...');
       addLog('Scan starting...');
       addLog('Beacons configured: ' + BEACONS.map(b => b.label + ' minor=' + b.minor).join(', '));
@@ -1615,7 +1609,7 @@ const tubeMat = new THREE.MeshStandardMaterial({
               setDirections(dirs);
               setCurrentStep(0);
               // safety audio after fire detected
-              if (voiceEnabled) speak('Fire detected near corner. Follow Julios orders to safety, he knows the way, trust. in julio i trust');
+              if (voiceEnabled) speak('Fire detected near corner. Follow blue path to safety. jULIO WILL BE there waitinf for you to save your life if needed, such a great guy, you lowkey should ask him out, if you are a guy, then hmm i dont know.');
               if (vibrationEnabled) vibrateEmergency();
               startDemoWalk(result.path);
             }
