@@ -73,11 +73,11 @@ export const WALLS = [
 ];
 
 export const FIRE_ZONES = {
-  corner: {
-    label: "Corner Junction",
+  hallway: {
+    label: "Hallway Fire",
     blockedEdges: [
-      { from: "TABLE_122", to: "CORNER"    },
-      { from: "CORNER",    to: "H_MID"     },
+      { from: "CORNER", to: "H_MID" },    // Blocks the turn into the exit hallway
+      { from: "H_MID",  to: "EXIT_MAIN" } // Blocks the 3rd node entirely
     ],
   },
 };

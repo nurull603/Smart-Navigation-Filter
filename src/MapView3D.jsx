@@ -877,27 +877,20 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
   // Horizontal arm: x=5 to x=10, y=0 (corner to exit)
 const BEACON_SEGMENTS = [
   { from: 'BEACON_1', to: 'BEACON_2', waypoints: [
-    { x: -6, y: 32 + (-57 * 1.0) }, // Table 122 (Start)
-    { x: -6, y: 32 + (-57 * 0.3) }, // V_MID3 (Stop 2)
+    { x: -6, y: -20 }, // Beacon 1: Table (Start)
+    { x: -6, y: -30 }  // Beacon 2: Corner (The Turn)
   ]},
   { from: 'BEACON_2', to: 'BEACON_3', waypoints: [
-    { x: -6, y: 32 + (-57 * 0.3) }, // V_MID3
-    { x: -6, y: 32 + (-57 * 0.5) }, // V_MID5 (Stop 3)
+    { x: -6, y: -30 },    // Corner
+    { x: -13.5, y: -30 }  // Beacon 3: Exit Path (Yellow)
   ]},
   { from: 'BEACON_3', to: 'BEACON_4', waypoints: [
-    { x: -6, y: 32 + (-57 * 0.5) }, // V_MID5
-    { x: -6, y: 32 + (-57 * 0.7) }, // V_MID7 (Stop 4)
-  ]},
-  { from: 'BEACON_4', to: 'BEACON_5', waypoints: [
-    { x: -6, y: 32 + (-57 * 0.7) }, // V_MID7
-    { x: -6, y: 32 },               // Corner (Stop 5)
-  ]},
-  { from: 'BEACON_5', to: 'BEACON_6', waypoints: [
-    { x: -6, y: 32 },               // Corner
-    { x: -6 - 15, y: 32 }           // Exit (Stop 6)
+    { x: -13.5, y: -30 }, // Exit Path
+    { x: -21, y: -30 }    // Beacon 4: Final Exit (Green)
   ]},
 ];
-const BEACON_ORDER = ['BEACON_1', 'BEACON_2', 'BEACON_3', 'BEACON_4', 'BEACON_5', 'BEACON_6'];
+
+const BEACON_ORDER = ['BEACON_1', 'BEACON_2', 'BEACON_3', 'BEACON_4'];
 
   // Interpolate position along a segment's waypoints
   const getSegmentPosition = (segment, ratio) => {
@@ -1604,9 +1597,9 @@ const tubeMat = new THREE.MeshStandardMaterial({
         if (data.active && data.zone && !emergencyMode) {
           // Fire detected by camera! Block the fire zone and auto-evacuate
           const zone = FIRE_ZONES?.[data.zone];
-          const fireBlocked = zone?.blockedEdges || [];
-          setBlockedEdges(fireBlocked);
-          setEmergencyMode(true);
+const fireBlocked = zone?.blockedEdges || [];
+setBlockedEdges(fireBlocked);
+setEmergencyMode(true);
           if (selectedStart) {
             const result = findNearestExit(selectedStart, NODES, EDGES, wheelchairMode, fireBlocked);
             if (result) {
