@@ -255,6 +255,7 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
   const [pathInfo, setPathInfo] = useState(null);
   const [directions, setDirections] = useState([]);
   const [currentStep, setCurrentStep] = useState(0);
+  const [showSuccess, setShowSuccess] = useState(false);
   const [demoRunning, setDemoRunning] = useState(false);
   const demoRafRef = useRef(null);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
@@ -357,13 +358,20 @@ export default function MapView3D({ profile, mode = 'navigate', onLocationUpdate
     if (currentStep < directions.length - 1) {
       const nextStep = currentStep + 1;
       setCurrentStep(nextStep);
+
+      // --- 2nd INSTRUCTION: TRIGGER SUCCESS SCREEN ---
+      if (directions[nextStep].type === 'arrive') {
+        setShowSuccess(true);
+      }
+      // -----------------------------------------------
+
       if (voiceEnabled) {
         speak(directions[nextStep].text);
       }
       if (vibrationEnabled) {
         vibrate(directions[nextStep].type);
       }
-      // Move blue dot to the node of this step
+      
       const nodeId = directions[nextStep].nodeId;
       if (nodeId && blueDotRef.current) {
         const node = NODES.find(n => n.id === nodeId);
@@ -1609,7 +1617,7 @@ const tubeMat = new THREE.MeshStandardMaterial({
               setDirections(dirs);
               setCurrentStep(0);
               // safety audio after fire detected
-              if (voiceEnabled) speak('Fire detected near corner. Follow blue path to safety. jULIO WILL BE there waitinf for you to save your life if needed, such a great guy, you lowkey should ask him out, if you are a guy, then hmm i dont know.');
+              if (voiceEnabled) speak('Fire detected near corner. Follow blue path to safety.');
               if (vibrationEnabled) vibrateEmergency();
               startDemoWalk(result.path);
             }
