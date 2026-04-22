@@ -12,8 +12,8 @@
 // ============================================================
 
 const CORNER_X = -6;
-const CORNER_Z = 32;
-const V_LENGTH = -57;
+const CORNER_Z = -30;
+const V_LENGTH = 10;
 const H_LENGTH = 15;
 
 export const BUILDING = {
@@ -24,49 +24,31 @@ export const BUILDING = {
 };
 
 export const NODES = [
-  // Horizontal arm
-  { id: "EXIT_MAIN", x: CORNER_X - H_LENGTH,       y: CORNER_Z,                   type: "exit",         accessible: true, label: "Main Exit" },
-  { id: "H_MID",     x: CORNER_X - H_LENGTH * 0.5, y: CORNER_Z,                   type: "hallway",      accessible: true, label: "Hallway to Exit" },
-  // Corner
-  { id: "CORNER",    x: CORNER_X,                   y: CORNER_Z,                   type: "intersection", accessible: true, label: "Corner Junction" },
-  // Vertical arm — 10 nodes
-  { id: "V_MID1",    x: CORNER_X, y: CORNER_Z + V_LENGTH * 0.1,  type: "hallway", accessible: true, label: "Aisle 1" },
-  { id: "V_MID2",    x: CORNER_X, y: CORNER_Z + V_LENGTH * 0.2,  type: "hallway", accessible: true, label: "Aisle 2" },
-  { id: "V_MID3",    x: CORNER_X, y: CORNER_Z + V_LENGTH * 0.3,  type: "hallway", accessible: true, label: "Aisle 3" },
-  { id: "V_MID4",    x: CORNER_X, y: CORNER_Z + V_LENGTH * 0.4,  type: "hallway", accessible: true, label: "Aisle 4" },
-  { id: "V_MID5",    x: CORNER_X, y: CORNER_Z + V_LENGTH * 0.5,  type: "hallway", accessible: true, label: "Aisle 5" },
-  { id: "V_MID6",    x: CORNER_X, y: CORNER_Z + V_LENGTH * 0.6,  type: "hallway", accessible: true, label: "Aisle 6" },
-  { id: "V_MID7",    x: CORNER_X, y: CORNER_Z + V_LENGTH * 0.7,  type: "hallway", accessible: true, label: "Aisle 7" },
-  { id: "V_MID8",    x: CORNER_X, y: CORNER_Z + V_LENGTH * 0.8,  type: "hallway", accessible: true, label: "Aisle 8" },
-  { id: "V_MID9",    x: CORNER_X, y: CORNER_Z + V_LENGTH * 0.9,  type: "hallway", accessible: true, label: "Aisle 9" },
-  // Refuge at bottom
-  { id: "TABLE_122", x: CORNER_X, y: CORNER_Z + V_LENGTH +1 ,         type: "refuge",  accessible: true, label: "Table 122 — Refuge" },
+  // Horizontal arm (the "_" of the _| shape)
+  { id: "EXIT_MAIN", x: CORNER_X - H_LENGTH,       y: CORNER_Z, type: "exit",         accessible: true, label: "Main Exit" },
+  { id: "H_MID",     x: CORNER_X - H_LENGTH * 0.5, y: CORNER_Z, type: "hallway",      accessible: true, label: "Exit Path" },
+  
+  // Corner (the intersection point)
+  { id: "CORNER",    x: CORNER_X, y: CORNER_Z, type: "intersection", accessible: true, label: "Corner Junction" },
+  
+  // Vertical arm (the "|" of the _| shape)
+  // Table 122 is now at the bottom of the stem
+  { id: "TABLE_122", x: CORNER_X, y: CORNER_Z + V_LENGTH, type: "refuge", accessible: true, label: "Table 122 — Start" },
 ];
 
 export const EDGES = [
-  // Horizontal arm
-  { from: "CORNER",   to: "H_MID",     accessible: true },
-  { from: "H_MID",    to: "EXIT_MAIN", accessible: true },
-  // Vertical arm
-  { from: "CORNER",   to: "V_MID1",   accessible: true },
-  { from: "V_MID1",   to: "V_MID2",   accessible: true },
-  { from: "V_MID2",   to: "V_MID3",   accessible: true },
-  { from: "V_MID3",   to: "V_MID4",   accessible: true },
-  { from: "V_MID4",   to: "V_MID5",   accessible: true },
-  { from: "V_MID5",   to: "V_MID6",   accessible: true },
-  { from: "V_MID6",   to: "V_MID7",   accessible: true },
-  { from: "V_MID7",   to: "V_MID8",   accessible: true },
-  { from: "V_MID8",   to: "V_MID9",   accessible: true },
-  { from: "V_MID9",   to: "TABLE_122", accessible: true },
+  // Vertical: Table up to Corner
+  { from: "TABLE_122", to: "CORNER",    accessible: true },
+  // Horizontal: Corner left to Exit
+  { from: "CORNER",    to: "H_MID",     accessible: true },
+  { from: "H_MID",     to: "EXIT_MAIN", accessible: true },
 ];
 
 export const BEACONS = [
-  { id: "BEACON_1", major: 3838, minor: 4949, nodeId: "TABLE_122", label: "Beacon 1 — Start" },
-  { id: "BEACON_2", major: 3838, minor: 4950, nodeId: "V_MID7",    label: "Beacon 2 — Aisle 7" }, // Change from V_MID3 to V_MID7
-  { id: "BEACON_3", major: 3838, minor: 4951, nodeId: "V_MID5",    label: "Beacon 3 — Aisle 5" },
-  { id: "BEACON_4", major: 3838, minor: 4952, nodeId: "V_MID3",    label: "Beacon 4 — Aisle 3" }, // Change from V_MID7 to V_MID3
-  { id: "BEACON_5", major: 3838, minor: 4953, nodeId: "CORNER",    label: "Beacon 5 — Corner" },
-  { id: "BEACON_6", major: 3838, minor: 4954, nodeId: "EXIT_MAIN", label: "Beacon 6 — Exit" },
+  { id: "BEACON_1", major: 3838, minor: 4949, nodeId: "TABLE_122", label: "Beacon 1 — Table" },
+  { id: "BEACON_2", major: 3838, minor: 4950, nodeId: "CORNER",    label: "Beacon 2 — Corner" },
+  { id: "BEACON_3", major: 3838, minor: 4951, nodeId: "H_MID",     label: "Beacon 3 — Hallway" },
+  { id: "BEACON_4", major: 3838, minor: 4952, nodeId: "EXIT_MAIN", label: "Beacon 4 — Exit" },
 ];
 
 export const ZONES = [
@@ -94,9 +76,8 @@ export const FIRE_ZONES = {
   corner: {
     label: "Corner Junction",
     blockedEdges: [
-      { from: "V_MID1",  to: "CORNER"    },
-      { from: "CORNER",  to: "H_MID"     },
-      { from: "H_MID",   to: "EXIT_MAIN" },
+      { from: "TABLE_122", to: "CORNER"    },
+      { from: "CORNER",    to: "H_MID"     },
     ],
   },
 };
