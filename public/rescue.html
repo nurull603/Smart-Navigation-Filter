@@ -65,6 +65,16 @@
   <div id="path-info">Loading path...</div>
 </div>
 
+<!-- EmailJS -->
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script>
+  emailjs.init('MFdwHswKAJxygTXwH'); // ← replace with your EmailJS public key
+</script>
+
+<!-- EmailJS -->
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script>emailjs.init('MFdwHswKAJxygTXwH');</script>
+
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
@@ -446,6 +456,31 @@ async function main() {
 
     document.getElementById('loading').style.display = 'none';
     document.getElementById('app').style.display = 'block';
+
+    // Send SOS email
+    emailjs.send('service_ai2r6pa', 'template_1b5qv28', {
+      user_name: userName,
+      user_location: userLocation,
+      alert_time: timestamp,
+      rescue_link: window.location.href,
+      message: `SOS! ${userName} needs help at ${userLocation}. Map: ${window.location.href}`,
+    }).then(() => console.log('SOS email sent!'))
+      .catch(err => console.warn('Email error:', err));
+
+    // Send email alert
+    const rescueLink = window.location.href;
+    emailjs.send('service_ai2r6pa', 'template_1b5qv28', {
+      to_email: 'jet178@scarletmail.rutgers.edu',
+      user_name: userName,
+      user_location: userLocation,
+      alert_time: timestamp,
+      rescue_link: rescueLink,
+      message: `🆘 SOS ALERT! ${userName} needs help at ${userLocation}. View rescue map: ${rescueLink}`,
+    }).then(() => {
+      console.log('Email sent!');
+    }).catch((err) => {
+      console.warn('Email failed:', err);
+    });
 
     // Set map container height
     const container = document.getElementById('map-container');
