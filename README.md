@@ -3,6 +3,7 @@
 **Intelligent Indoor Navigation System for Real-Time Path Optimization and Inclusive Emergency Evacuation**
 
 
+
 ---
 
 ## What It Does
@@ -133,7 +134,11 @@ service cloud.firestore {
 }
 ```
 
-## Team
+
+ECE 2nd Place and SOE Theme Award in the Category of Construction, Water Systems & the Built Environment
+Project Title: Intelligent Smart Navigation System for Real Time Path Optimization
+
+Team: SP26-10
 
 - Julio Tito
 - Cinchan Harikrishna
@@ -144,3 +149,4 @@ service cloud.firestore {
 **Advisors:** Dr. Katherine Grace August (IEEE) & Dr. Sasan Haghani
 
 Rutgers University — School of Engineering — ECE Department — Capstone S26-10
+
