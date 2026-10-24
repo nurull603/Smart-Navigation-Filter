@@ -1,8 +1,22 @@
- Smart Navigation Filter
+# Smart Navigation Filter
+
+<p align="center">
+  <a href="https://engexpo.rutgers.edu/awards">
+    <img src="https://img.shields.io/badge/Award-2nd%20Place%20Overall%20(ECE)-gold?style=for-the-badge" alt="2nd Place Overall" />
+  </a>
+  <a href="https://engexpo.rutgers.edu/awards">
+    <img src="https://img.shields.io/badge/Award-1st%20Place%20SOE%20Theme-blue?style=for-the-badge" alt="1st Place Theme" />
+  </a>
+</p>
 
 **Intelligent Indoor Navigation System for Real-Time Path Optimization and Inclusive Emergency Evacuation**
 
+> 🏆 **Awards & Recognition:**
+> - **ECE Department 2nd Place Overall**
+> - **SOE Theme Award:** *Construction, Water Systems & the Built Environment*
+> - Verified at the [Rutgers Engineering Expo Awards Directory](https://engexpo.rutgers.edu/awards)
 
+---
 
 ---
 
